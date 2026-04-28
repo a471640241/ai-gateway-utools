@@ -277,7 +277,8 @@ function messagesToChatSSEFactory() {
 
       if (data.type === 'message_delta') {
         const reason = data.delta?.stop_reason
-        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: {}, finish_reason: reason === 'end_turn' ? 'stop' : reason }] })
+        const reverseFinish = { end_turn: 'stop', max_tokens: 'length', tool_use: 'tool_calls', stop_sequence: 'stop' }
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: {}, finish_reason: reverseFinish[reason] || reason }] })
       }
 
       if (data.type === 'message_stop') {
