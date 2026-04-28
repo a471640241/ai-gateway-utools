@@ -6,17 +6,18 @@ const navigate = inject('navigate')
 // --- Settings ---
 const port = ref(9999)
 const autoStart = ref(false)
+const logEnabled = ref(false)
 const saved = ref(false)
 
 // --- Stats ---
 const stats = ref(null)
 const logs = ref([])
-const showLogs = ref(false)
 
 function loadSettings() {
   const settings = window.services.getSettings()
   port.value = settings.port || 9999
   autoStart.value = settings.autoStart || false
+  logEnabled.value = window.services.getLogEnabled()
 }
 
 function saveSettings() {
@@ -25,6 +26,10 @@ function saveSettings() {
   window.services.setSettings({ port: portNum, autoStart: autoStart.value })
   saved.value = true
   setTimeout(() => saved.value = false, 1500)
+}
+
+function toggleLogging() {
+  window.services.setLogEnabled(logEnabled.value)
 }
 
 function loadStats() {
@@ -95,6 +100,16 @@ onMounted(() => {
           <input type="checkbox" v-model="autoStart" />
           <span>启动 uTools 时自动开启代理</span>
         </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <label class="check-field" @change="toggleLogging">
+          <input type="checkbox" v-model="logEnabled" />
+          <span>记录请求参数与返回参数</span>
+        </label>
+        <p class="field-hint">开启后会在请求日志中记录请求体和响应体内容（最多 500 字符），代理重载后生效</p>
       </div>
     </div>
 
@@ -171,11 +186,8 @@ onMounted(() => {
 
       <!-- Recent Logs -->
       <div class="card">
-        <div class="card-header">
-          <h3>请求日志</h3>
-          <button class="link-btn" @click="showLogs = !showLogs">{{ showLogs ? '收起' : '展开' }}</button>
-        </div>
-        <div class="log-list" v-if="showLogs && logs.length">
+        <div class="card-header"><h3>请求日志</h3></div>
+        <div class="log-list" v-if="logs.length">
           <div class="log-item" v-for="l in logs" :key="l.timestamp">
             <div class="log-top">
               <span class="log-badge" :class="statusLabel(l.statusCode)">{{ l.statusCode }}</span>
@@ -186,9 +198,20 @@ onMounted(() => {
               <span>{{ l.model }}</span>
               <span class="log-dur">{{ l.duration }}ms</span>
             </div>
+            <details class="log-detail" v-if="l.requestBody || l.responseBody">
+              <summary>查看参数</summary>
+              <div class="log-body" v-if="l.requestBody">
+                <span class="log-body-label">请求</span>
+                <pre>{{ l.requestBody }}</pre>
+              </div>
+              <div class="log-body" v-if="l.responseBody">
+                <span class="log-body-label">响应</span>
+                <pre>{{ l.responseBody }}</pre>
+              </div>
+            </details>
           </div>
         </div>
-        <div class="card-empty" v-else-if="showLogs">暂无日志记录</div>
+        <div class="card-empty" v-else>暂无日志记录</div>
       </div>
     </template>
   </div>
@@ -322,4 +345,30 @@ onMounted(() => {
   transition: all .15s;
 }
 .refresh-btn:hover { background: #f1f5f9; }
+
+.field-hint {
+  font-size: 12px; color: #94a3b8; margin: 6px 0 0;
+}
+
+/* Log Detail */
+.log-detail {
+  margin-top: 6px;
+}
+.log-detail summary {
+  font-size: 12px; color: #6366f1; cursor: pointer; user-select: none;
+}
+.log-body {
+  margin-top: 8px;
+}
+.log-body-label {
+  font-size: 10px; font-weight: 700; color: #94a3b8;
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.log-body pre {
+  margin-top: 4px; padding: 8px 10px;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+  font-size: 11px; font-family: 'SF Mono', monospace; color: #475569;
+  white-space: pre-wrap; word-break: break-all; max-height: 200px;
+  overflow-y: auto;
+}
 </style>

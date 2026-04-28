@@ -167,4 +167,21 @@ function restart() {
   return stop().then(() => start())
 }
 
-module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback, getLogs, getStats }
+function getLogEnabled() {
+  return configStore.getProxySettings().logEnabled || false
+}
+
+function setLogEnabled(enabled) {
+  const settings = configStore.getProxySettings()
+  settings.logEnabled = enabled
+  configStore.setProxySettings(settings)
+  if (child && status === 'running') {
+    child.send({ type: 'reload', config: {
+      profile: configStore.getActiveProfile(),
+      settings,
+      models: configStore.getModels()
+    }})
+  }
+}
+
+module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback, getLogs, getStats, getLogEnabled, setLogEnabled }

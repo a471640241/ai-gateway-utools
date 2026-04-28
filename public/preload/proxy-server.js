@@ -9,6 +9,7 @@ const { URL } = require('url')
 // --- State ---
 
 let currentConfig = null // { profile: {...}, models: [...] }
+let logEnabled = false
 
 // --- Path → source format mapping ---
 
@@ -89,7 +90,7 @@ function flattenBodyMessages(body) {
 
 // --- Forward request to upstream ---
 
-function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter) {
+function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter, onResponseBody) {
   const parsed = new URL(upstreamUrl)
   const isHttps = parsed.protocol === 'https:'
   const transport = isHttps ? https : http
@@ -114,6 +115,13 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
     if (!isStreaming || !sseConverter) {
       // Non-streaming or no conversion needed — pipe through
       clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers)
+      if (onResponseBody) {
+        const chunks = []
+        upstreamRes.on('data', c => chunks.push(c))
+        upstreamRes.on('end', () => {
+          try { onResponseBody(Buffer.concat(chunks).toString().slice(0, 1000)) } catch {}
+        })
+      }
       upstreamRes.pipe(clientRes)
     } else {
       // SSE streaming with conversion
@@ -578,12 +586,15 @@ async function handleApiRequest(req, res) {
     ? createSSEConverter(source, meta.target)
     : null
 
-  forwardRequest(req, res, upstreamUrl, profile.apiKey, body, sseConverter)
+  forwardRequest(req, res, upstreamUrl, profile.apiKey, body, sseConverter,
+    req._onResponseBody || null
+  )
 }
 
 // --- HTTP Server ---
 
-function logRequest(endpoint, model, statusCode, duration, error) {
+function logRequest(endpoint, model, statusCode, duration, error, requestBody, responseBody) {
+  if (!logEnabled) return
   process.send({
     type: 'log',
     data: {
@@ -592,7 +603,9 @@ function logRequest(endpoint, model, statusCode, duration, error) {
       model: model || '-',
       statusCode,
       duration,
-      error: error || null
+      error: error || null,
+      requestBody: requestBody ? JSON.stringify(requestBody).slice(0, 500) : null,
+      responseBody: responseBody ? responseBody.slice(0, 1000) : null
     }
   })
 }
@@ -601,18 +614,22 @@ const server = http.createServer(async (req, res) => {
   const startTime = Date.now()
   const endpoint = req.url
   let model = '-'
+  let rawBody = null
+  let responseBody = null
 
   try {
     if (req.url === '/v1/models' && req.method === 'GET') {
       handleModels(req, res)
       res.on('finish', () => {
-        logRequest(endpoint, '-', res.statusCode, Date.now() - startTime)
+        logRequest(endpoint, '-', res.statusCode, Date.now() - startTime, null, null, null)
       })
     } else if (PATH_TO_SOURCE[req.url]) {
-      // 预读 body 以获取 model
-      const rawBody = await readBody(req)
+      rawBody = await readBody(req)
       model = (rawBody && rawBody.model) || '-'
       req._body = rawBody
+      if (logEnabled) {
+        req._onResponseBody = (body) => { responseBody = body }
+      }
       await handleApiRequest(req, res)
     } else {
       res.writeHead(404, { 'Content-Type': 'application/json' })
@@ -624,12 +641,12 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }))
     }
     model = model || '-'
-    logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message)
+    logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message, rawBody, responseBody)
     return
   }
 
   res.on('finish', () => {
-    logRequest(endpoint, model, res.statusCode, Date.now() - startTime)
+    logRequest(endpoint, model, res.statusCode, Date.now() - startTime, null, rawBody, responseBody)
   })
 })
 
@@ -642,8 +659,10 @@ process.on('message', (msg) => {
     server.listen(port, '127.0.0.1', () => {
       process.send({ type: 'started', port })
     })
+    logEnabled = !!(msg.config.settings && msg.config.settings.logEnabled)
   } else if (msg.type === 'reload') {
     currentConfig = msg.config
+    logEnabled = !!(msg.config.settings && msg.config.settings.logEnabled)
   }
 })
 

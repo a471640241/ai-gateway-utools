@@ -105,6 +105,14 @@ window.services = {
     return proxyManager.getLogs(limit)
   },
 
+  getLogEnabled() {
+    return proxyManager.getLogEnabled()
+  },
+
+  setLogEnabled(enabled) {
+    return proxyManager.setLogEnabled(enabled)
+  },
+
   // 复制文本到系统剪贴板
   copyText(text) {
     try {
