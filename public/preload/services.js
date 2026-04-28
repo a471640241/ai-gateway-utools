@@ -1,24 +1,102 @@
-const fs = require('node:fs')
-const path = require('node:path')
+// public/preload/services.js
+// 通过 window.services 向渲染进程暴露 Node.js 能力
+// 运行在 uTools preload 环境
 
-// 通过 window 对象向渲染进程注入 nodejs 能力
+const proxyManager = require('./proxy-manager')
+const configStore = require('./config-store')
+
 window.services = {
-  // 读文件
-  readFile (file) {
-    return fs.readFileSync(file, { encoding: 'utf-8' })
+  // --- Proxy control ---
+  startProxy() {
+    return proxyManager.start()
   },
-  // 文本写入到下载目录
-  writeTextFile (text) {
-    const filePath = path.join(window.utools.getPath('downloads'), Date.now().toString() + '.txt')
-    fs.writeFileSync(filePath, text, { encoding: 'utf-8' })
-    return filePath
+
+  stopProxy() {
+    return proxyManager.stop()
   },
-  // 图片写入到下载目录
-  writeImageFile (base64Url) {
-    const matchs = /^data:image\/([a-z]{1,20});base64,/i.exec(base64Url)
-    if (!matchs) return
-    const filePath = path.join(window.utools.getPath('downloads'), Date.now().toString() + '.' + matchs[1])
-    fs.writeFileSync(filePath, base64Url.substring(matchs[0].length), { encoding: 'base64' })
-    return filePath
+
+  getProxyStatus() {
+    return { status: proxyManager.getStatus(), port: proxyManager.getPort() }
+  },
+
+  // --- Profile CRUD ---
+  getProfiles() {
+    return configStore.getProfiles()
+  },
+
+  addProfile(profile) {
+    const saved = configStore.addProfile(profile)
+    const activeId = configStore.getActiveProfileId()
+    if (!activeId) {
+      configStore.setActiveProfile(saved.id)
+      proxyManager.reload()
+    }
+    return saved
+  },
+
+  updateProfile(id, updates) {
+    const saved = configStore.updateProfile(id, updates)
+    const activeId = configStore.getActiveProfileId()
+    if (activeId === id && proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+    return saved
+  },
+
+  deleteProfile(id) {
+    configStore.deleteProfile(id)
+  },
+
+  // --- Active profile ---
+  getActiveProfile() {
+    return configStore.getActiveProfile()
+  },
+
+  setActiveProfile(id) {
+    configStore.setActiveProfile(id)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+  },
+
+  // --- Settings ---
+  getSettings() {
+    return configStore.getProxySettings()
+  },
+
+  setSettings(settings) {
+    const saved = configStore.setProxySettings(settings)
+    proxyManager.reload()
+    return saved
+  },
+
+  // --- Models ---
+  getModels() {
+    return configStore.getModels()
+  },
+
+  addModel(modelId) {
+    const models = configStore.getModels()
+    if (models.includes(modelId)) return models
+    const updated = [...models, modelId]
+    configStore.setModels(updated)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+    return updated
+  },
+
+  removeModel(modelId) {
+    const models = configStore.getModels().filter(m => m !== modelId)
+    configStore.setModels(models)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+    return models
   }
 }
+
+// 插件退出时清理子进程
+window.utools.onPluginOut(() => {
+  proxyManager.stop()
+})
