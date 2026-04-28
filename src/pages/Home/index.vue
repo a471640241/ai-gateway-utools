@@ -9,6 +9,7 @@ const profiles = ref([])
 const activeProfileId = ref(null)
 const models = ref([])
 const newModelId = ref('')
+const showModelTip = ref(true)
 
 const proxyUrl = computed(() => `http://127.0.0.1:${proxyPort.value}`)
 
@@ -48,12 +49,12 @@ function selectProfile(id) {
 }
 
 function copyUrl() {
-  navigator.clipboard.writeText(proxyUrl.value)
+  window.services.copyText(proxyUrl.value)
   window.utools.showNotification('已复制代理地址')
 }
 
 function copyProfile(p) {
-  navigator.clipboard.writeText(p.baseUrl)
+  window.services.copyText(p.baseUrl)
   window.utools.showNotification('已复制 ' + p.baseUrl)
 }
 
@@ -160,8 +161,9 @@ onMounted(loadData)
     <div class="section">
       <div class="section-header">
         <h3>全局模型</h3>
-        <span class="tip" title="此处添加的模型 ID 会通过 /v1/models 接口返回给客户端">? 说明</span>
+        <span class="tip" @click="showModelTip = !showModelTip">?</span>
       </div>
+      <p class="model-desc" v-if="showModelTip">此处添加的模型 ID 仅用于 <code>/v1/models</code> 接口返回，客户端通过该接口获取可用模型列表。</p>
       <div class="model-tags" v-if="models.length > 0">
         <span v-for="m in models" :key="m" class="model-tag">
           {{ m }}
@@ -310,15 +312,42 @@ onMounted(loadData)
 }
 
 .tip {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid #d1d5db;
+  font-size: 10px;
+  font-weight: 700;
   color: #9ca3af;
-  cursor: help;
-  border-bottom: 1px dashed #d1d5db;
-  padding-bottom: 1px;
-  transition: color 0.15s;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1;
 }
 .tip:hover {
+  background: #e5e7eb;
   color: #6b7280;
+  border-color: #cbd5e1;
+}
+
+.model-desc {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+}
+.model-desc code {
+  font-family: monospace;
+  background: #fef3c7;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #92400e;
 }
 
 .btn-add {

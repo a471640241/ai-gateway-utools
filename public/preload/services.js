@@ -2,6 +2,7 @@
 // 通过 window.services 向渲染进程暴露 Node.js 能力
 // 运行在 uTools preload 环境
 
+const { execSync } = require('child_process')
 const proxyManager = require('./proxy-manager')
 const configStore = require('./config-store')
 
@@ -95,6 +96,21 @@ window.services = {
     return models
   },
 
+  // 复制文本到系统剪贴板
+  copyText(text) {
+    try {
+      if (process.platform === 'darwin') {
+        execSync('pbcopy', { input: text })
+      } else if (process.platform === 'win32') {
+        execSync('clip', { input: text })
+      } else {
+        execSync('xclip -selection clipboard', { input: text })
+      }
+    } catch {
+      // 系统剪贴板不可用时静默失败
+    }
+  },
+
   // 注册状态变更回调（子进程崩溃时自动通知 UI）
   onStatusChange(fn) {
     this._statusListener = fn
@@ -104,11 +120,4 @@ window.services = {
 // 插件退出时清理子进程
 window.utools.onPluginOut(() => {
   proxyManager.stop()
-})
-
-// 子进程崩溃通知 → UI 状态回调
-proxyManager.setCrashCallback(() => {
-  if (window.services._statusListener) {
-    window.services._statusListener('stopped')
-  }
 })
