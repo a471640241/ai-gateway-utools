@@ -25,6 +25,13 @@ onMounted(() => {
   }
   window.utools.onPluginEnter((action) => {
     navigate(action.code, action.payload)
+    if (window.services) {
+      const settings = window.services.getSettings()
+      const status = window.services.getProxyStatus()
+      if (settings.autoStart && status.status !== 'running') {
+        window.services.startProxy().catch(() => {})
+      }
+    }
   })
   // 插件退出时停止代理子进程，避免遗留孤进程
   window.utools.onPluginOut(() => {

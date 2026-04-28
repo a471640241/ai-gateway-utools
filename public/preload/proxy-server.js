@@ -79,6 +79,11 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         'Connection': 'keep-alive'
       })
 
+      // 客户端断连时中断上游请求
+      clientRes.on('error', () => {
+        upstreamReq.destroy()
+      })
+
       let buffer = ''
       upstreamRes.on('data', (chunk) => {
         buffer += chunk.toString()
@@ -102,8 +107,12 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
   })
 
   upstreamReq.on('error', (err) => {
-    clientRes.writeHead(502, { 'Content-Type': 'application/json' })
-    clientRes.end(JSON.stringify({ error: 'Bad Gateway', message: err.message }))
+    if (!clientRes.headersSent) {
+      clientRes.writeHead(502, { 'Content-Type': 'application/json' })
+      clientRes.end(JSON.stringify({ error: 'Bad Gateway', message: err.message }))
+    } else {
+      clientRes.end()
+    }
   })
 
   upstreamReq.write(bodyStr)
@@ -125,12 +134,21 @@ const converters = {}
 
 // === Body Converters ===
 
+function extractSystemContent(msg) {
+  if (!msg) return ''
+  if (typeof msg.content === 'string') return msg.content
+  if (Array.isArray(msg.content)) {
+    return msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+  }
+  return ''
+}
+
 function convertChatToMessages(body) {
   const { messages, ...rest } = body
   const systemMsg = messages.find(m => m.role === 'system')
   const nonSystem = messages.filter(m => m.role !== 'system')
   const result = { ...rest, messages: nonSystem }
-  if (systemMsg) result.system = typeof systemMsg.content === 'string' ? systemMsg.content : ''
+  if (systemMsg) result.system = extractSystemContent(systemMsg)
   return result
 }
 
@@ -174,7 +192,7 @@ function convertResponsesToMessages(body) {
   const systemMsg = msgs.find(m => m.role === 'system')
   const nonSystem = msgs.filter(m => m.role !== 'system')
   const result = { ...rest, messages: nonSystem }
-  if (systemMsg) result.system = typeof systemMsg.content === 'string' ? systemMsg.content : ''
+  if (systemMsg) result.system = extractSystemContent(systemMsg)
   return result
 }
 
