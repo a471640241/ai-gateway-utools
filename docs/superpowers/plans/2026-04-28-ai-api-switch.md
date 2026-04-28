@@ -1964,7 +1964,7 @@ body {
 }
 ```
 
-- [ ] **Step 2: 运行开发服务器验证构建**
+- [ ] **Step 2: 运行开发服务器验证编译**
 
 ```bash
 npm run dev
@@ -1973,12 +1973,21 @@ npm run dev
 # ➜  Local:   http://localhost:5173/
 ```
 
+- [ ] **Step 3: 生产构建验证**
+
+```bash
+npm run build
+# 确认构建成功，无错误
+# 预期输出：✓ built in xxx ms
+# 产物位于 dist/ 目录
+```
+
 在 uTools 中导入项目目录，验证：
 - 输入 `ai` 进入主页
 - 输入 `ai add` 进入配置编辑
 - 输入 `ai set` 进入设置
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add src/main.css
