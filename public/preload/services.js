@@ -96,6 +96,15 @@ window.services = {
     return models
   },
 
+  // --- Stats & Logs ---
+  getStats() {
+    return proxyManager.getStats()
+  },
+
+  getLogs(limit) {
+    return proxyManager.getLogs(limit)
+  },
+
   // 复制文本到系统剪贴板
   copyText(text) {
     try {

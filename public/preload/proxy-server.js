@@ -80,9 +80,11 @@ function flattenMessageContent(msg) {
 }
 
 function flattenBodyMessages(body) {
-  const msgArray = body.messages || body.input
+  const msgArray = body.input || body.messages
   if (!msgArray) return body
-  return { ...body, messages: msgArray.map(flattenMessageContent), input: msgArray.map(flattenMessageContent) }
+  const flattened = msgArray.map(flattenMessageContent)
+  if (body.input) return { ...body, input: flattened }
+  return { ...body, messages: flattened }
 }
 
 // --- Forward request to upstream ---
@@ -198,7 +200,7 @@ function extractSystemContent(msg) {
   if (!msg) return ''
   if (typeof msg.content === 'string') return msg.content
   if (Array.isArray(msg.content)) {
-    return msg.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+    return msg.content.filter(c => c.type === 'text' || c.type === 'input_text').map(c => c.text).join('\n')
   }
   return ''
 }
@@ -545,13 +547,15 @@ async function handleApiRequest(req, res) {
     return
   }
 
-  let body
-  try {
-    body = await readBody(req)
-  } catch (e) {
-    res.writeHead(400, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Invalid JSON body' }))
-    return
+  let body = req._body
+  if (!body) {
+    try {
+      body = await readBody(req)
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Invalid JSON body' }))
+      return
+    }
   }
 
   // Clean malformed body: strip "[undefined]" strings, flatten input_text content arrays
@@ -579,20 +583,54 @@ async function handleApiRequest(req, res) {
 
 // --- HTTP Server ---
 
+function logRequest(endpoint, model, statusCode, duration, error) {
+  process.send({
+    type: 'log',
+    data: {
+      timestamp: Date.now(),
+      endpoint,
+      model: model || '-',
+      statusCode,
+      duration,
+      error: error || null
+    }
+  })
+}
+
 const server = http.createServer(async (req, res) => {
+  const startTime = Date.now()
+  const endpoint = req.url
+  let model = '-'
+
   try {
     if (req.url === '/v1/models' && req.method === 'GET') {
       handleModels(req, res)
+      res.on('finish', () => {
+        logRequest(endpoint, '-', res.statusCode, Date.now() - startTime)
+      })
     } else if (PATH_TO_SOURCE[req.url]) {
+      // 预读 body 以获取 model
+      const rawBody = await readBody(req)
+      model = (rawBody && rawBody.model) || '-'
+      req._body = rawBody
       await handleApiRequest(req, res)
     } else {
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Not Found' }))
     }
   } catch (err) {
-    res.writeHead(500, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }))
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }))
+    }
+    model = model || '-'
+    logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message)
+    return
   }
+
+  res.on('finish', () => {
+    logRequest(endpoint, model, res.statusCode, Date.now() - startTime)
+  })
 })
 
 // --- IPC: receive config from parent (preload) ---

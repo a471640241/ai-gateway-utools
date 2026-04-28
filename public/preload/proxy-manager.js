@@ -11,6 +11,69 @@ let status = 'stopped' // 'stopped' | 'running'
 let stopping = false
 let crashCallback = null
 
+// --- Request logs (in-memory, max 1000 entries) ---
+const MAX_LOGS = 1000
+const logs = []
+
+function addLog(entry) {
+  logs.push(entry)
+  if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS)
+}
+
+function getLogs(limit) {
+  return logs.slice(-(limit || 100))
+}
+
+function getStats() {
+  const now = Date.now()
+  const thirtyDaysAgo = now - 30 * 24 * 3600 * 1000
+  const recentLogs = logs.filter(l => l.timestamp >= thirtyDaysAgo)
+
+  // 按接口统计
+  const byEndpoint = {}
+  // 按模型统计
+  const byModel = {}
+  // 按天统计（近30天趋势）
+  const byDay = {}
+  // 异常统计
+  const errors = []
+
+  for (const l of recentLogs) {
+    const ep = l.endpoint || '-'
+    byEndpoint[ep] = (byEndpoint[ep] || 0) + 1
+
+    const m = l.model || '-'
+    byModel[m] = (byModel[m] || 0) + 1
+
+    // 按天聚合
+    const day = new Date(l.timestamp).toISOString().slice(0, 10)
+    byDay[day] = (byDay[day] || 0) + 1
+
+    // 异常收集（非 2xx 且非 404）
+    if (l.statusCode && (l.statusCode < 200 || l.statusCode >= 300) && l.statusCode !== 404) {
+      errors.push({
+        timestamp: l.timestamp,
+        endpoint: l.endpoint,
+        statusCode: l.statusCode,
+        error: l.error
+      })
+    }
+  }
+
+  // 按天排序
+  const trend = Object.entries(byDay)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, count]) => ({ date, count }))
+
+  return {
+    totalRequests: recentLogs.length,
+    byEndpoint: Object.entries(byEndpoint).map(([k, v]) => ({ endpoint: k, count: v })),
+    byModel: Object.entries(byModel).map(([k, v]) => ({ model: k, count: v })),
+    trend,
+    errors: errors.slice(-50) // 最近50条异常
+  }
+}
+
 function setCrashCallback(fn) { crashCallback = fn }
 
 function getStatus() {
@@ -43,6 +106,8 @@ function start() {
         resolve({ port: msg.port, status: 'running' })
       } else if (msg.type === 'error') {
         reject(new Error(msg.error + ': ' + msg.message))
+      } else if (msg.type === 'log') {
+        addLog(msg.data)
       }
     })
 
@@ -102,4 +167,4 @@ function restart() {
   return stop().then(() => start())
 }
 
-module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback }
+module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback, getLogs, getStats }
