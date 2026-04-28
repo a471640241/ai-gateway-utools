@@ -3,6 +3,9 @@
 // 运行在 uTools preload 环境
 
 const { execSync } = require('child_process')
+const http = require('http')
+const https = require('https')
+const { URL } = require('url')
 const proxyManager = require('./proxy-manager')
 const configStore = require('./config-store')
 
@@ -96,6 +99,73 @@ window.services = {
     return models
   },
 
+  // 从上游提供商获取模型列表
+  fetchProviderModels(profile) {
+    return new Promise((resolve, reject) => {
+      const baseUrl = profile.baseUrl.replace(/\/+$/, '')
+      const url = `${baseUrl}/v1/models`
+      const parsed = new URL(url)
+      const isHttps = parsed.protocol === 'https:'
+      const transport = isHttps ? https : http
+
+      const options = {
+        hostname: parsed.hostname,
+        port: parsed.port || (isHttps ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${profile.apiKey}`,
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+
+      const req = transport.request(options, (res) => {
+        const chunks = []
+        res.on('data', c => chunks.push(c))
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString()
+          const status = res.statusCode
+          const statusMessages = {
+            401: 'API Key 无效或无权限访问',
+            403: '无权限访问该接口',
+            404: '该提供商不支持 /v1/models 端点',
+            429: '请求过于频繁，请稍后重试',
+            500: '上游服务器内部错误',
+            502: '上游网关错误',
+            503: '上游服务暂不可用'
+          }
+          if (status !== 200) {
+            const tip = statusMessages[status] || `HTTP 状态码 ${status}`
+            reject(new Error(`${tip}\n${raw.slice(0, 200)}`))
+            return
+          }
+          try {
+            const body = JSON.parse(raw)
+            if (body.data && Array.isArray(body.data)) {
+              resolve(body.data.map(m => m.id || m).filter(Boolean))
+            } else if (body.models && Array.isArray(body.models)) {
+              resolve(body.models.map(m => m.id || m).filter(Boolean))
+            } else {
+              reject(new Error(`未知响应格式: ${JSON.stringify(body).slice(0, 300)}`))
+            }
+          } catch (e) {
+            reject(new Error(`JSON解析失败: ${raw.slice(0, 500)}`))
+          }
+        })
+      })
+
+      req.on('error', (err) => {
+        reject(new Error('请求失败: ' + err.message))
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        reject(new Error('请求超时'))
+      })
+      req.end()
+    })
+  },
+
   // --- Stats & Logs ---
   getStats() {
     return proxyManager.getStats()
@@ -103,6 +173,10 @@ window.services = {
 
   getLogs(limit) {
     return proxyManager.getLogs(limit)
+  },
+
+  clearLogs() {
+    proxyManager.clearLogs()
   },
 
   getLogEnabled() {

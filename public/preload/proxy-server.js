@@ -24,7 +24,8 @@ const PATH_TO_SOURCE = {
 const PROVIDER_META = {
   'openai-chat':        { target: 'chat_completions', path: '/v1/chat/completions' },
   'openai-response':    { target: 'responses',        path: '/v1/responses' },
-  'anthropic-message':  { target: 'messages',          path: '/v1/messages' }
+  'anthropic-message':  { target: 'messages',          path: '/v1/messages' },
+  'newapi':             { target: 'chat_completions', path: '/v1/chat/completions' }
 }
 
 // --- Read request body ---
@@ -594,20 +595,21 @@ async function handleApiRequest(req, res) {
 // --- HTTP Server ---
 
 function logRequest(endpoint, model, statusCode, duration, error, requestBody, responseBody) {
-  if (!logEnabled) return
-  process.send({
-    type: 'log',
-    data: {
-      timestamp: Date.now(),
-      endpoint,
-      model: model || '-',
-      statusCode,
-      duration,
-      error: error || null,
-      requestBody: requestBody ? JSON.stringify(requestBody).slice(0, 500) : null,
-      responseBody: responseBody ? responseBody.slice(0, 1000) : null
-    }
-  })
+  const data = {
+    timestamp: Date.now(),
+    endpoint,
+    model: model || '-',
+    provider: (currentConfig && currentConfig.profile) ? currentConfig.profile.name : '-',
+    statusCode,
+    duration,
+    error: error || null
+  }
+  // 仅当开启详细日志时才记录请求/响应体
+  if (logEnabled) {
+    data.requestBody = requestBody ? JSON.stringify(requestBody).slice(0, 500) : null
+    data.responseBody = responseBody && typeof responseBody === 'string' ? responseBody.slice(0, 1000) : null
+  }
+  process.send({ type: 'log', data })
 }
 
 const server = http.createServer(async (req, res) => {

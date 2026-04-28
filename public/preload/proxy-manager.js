@@ -24,18 +24,19 @@ function getLogs(limit) {
   return logs.slice(-(limit || 100))
 }
 
+function clearLogs() {
+  logs.length = 0
+}
+
 function getStats() {
   const now = Date.now()
   const thirtyDaysAgo = now - 30 * 24 * 3600 * 1000
   const recentLogs = logs.filter(l => l.timestamp >= thirtyDaysAgo)
 
-  // 按接口统计
   const byEndpoint = {}
-  // 按模型统计
   const byModel = {}
-  // 按天统计（近30天趋势）
+  const byProvider = {}
   const byDay = {}
-  // 异常统计
   const errors = []
 
   for (const l of recentLogs) {
@@ -45,11 +46,12 @@ function getStats() {
     const m = l.model || '-'
     byModel[m] = (byModel[m] || 0) + 1
 
-    // 按天聚合
+    const pv = l.provider || '-'
+    byProvider[pv] = (byProvider[pv] || 0) + 1
+
     const day = new Date(l.timestamp).toISOString().slice(0, 10)
     byDay[day] = (byDay[day] || 0) + 1
 
-    // 异常收集（非 2xx 且非 404）
     if (l.statusCode && (l.statusCode < 200 || l.statusCode >= 300) && l.statusCode !== 404) {
       errors.push({
         timestamp: l.timestamp,
@@ -60,7 +62,6 @@ function getStats() {
     }
   }
 
-  // 按天排序
   const trend = Object.entries(byDay)
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([date, count]) => ({ date, count }))
@@ -68,9 +69,10 @@ function getStats() {
   return {
     totalRequests: recentLogs.length,
     byEndpoint: Object.entries(byEndpoint).map(([k, v]) => ({ endpoint: k, count: v })),
+    byProvider: Object.entries(byProvider).map(([k, v]) => ({ provider: k, count: v })),
     byModel: Object.entries(byModel).map(([k, v]) => ({ model: k, count: v })),
     trend,
-    errors: errors.slice(-50) // 最近50条异常
+    errors: errors.slice(-50)
   }
 }
 
@@ -184,4 +186,4 @@ function setLogEnabled(enabled) {
   }
 }
 
-module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback, getLogs, getStats, getLogEnabled, setLogEnabled }
+module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback, getLogs, clearLogs, getStats, getLogEnabled, setLogEnabled }

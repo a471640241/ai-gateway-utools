@@ -82,6 +82,7 @@ onMounted(() => {
               <option value="openai-chat">OpenAI Chat Completions</option>
               <option value="openai-response">OpenAI Responses</option>
               <option value="anthropic-message">Anthropic Messages</option>
+              <option value="newapi">NEW API</option>
             </select>
           </div>
 

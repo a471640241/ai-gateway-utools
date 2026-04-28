@@ -86,13 +86,75 @@ function removeModel(id) {
   models.value = window.services.removeModel(id)
 }
 
+function clearModels() {
+  if (!window.confirm('确定要清空所有全局模型吗？')) return
+  const list = [...models.value]
+  for (const m of list) {
+    window.services.removeModel(m)
+  }
+  models.value = []
+}
+
+// Model picker modal
+const modelPickerVisible = ref(false)
+const modelPickerList = ref([])     // [{ id, exists }]
+const modelPickerSelected = ref({}) // { id: true/false }
+const modelSearch = ref('')
+
+const filteredModelList = computed(() => {
+  const q = modelSearch.value.trim().toLowerCase()
+  if (!q) return modelPickerList.value
+  return modelPickerList.value.filter(m => m.id.toLowerCase().includes(q))
+})
+
+function selectAllModels() {
+  for (const m of filteredModelList.value) {
+    if (!m.exists) modelPickerSelected.value[m.id] = true
+  }
+}
+
+function invertModelSelection() {
+  for (const m of filteredModelList.value) {
+    if (!m.exists) modelPickerSelected.value[m.id] = !modelPickerSelected.value[m.id]
+  }
+}
+
+async function fetchProviderModels(p) {
+  showToast('正在获取模型列表...')
+  try {
+    const list = await window.services.fetchProviderModels(p)
+    const existing = window.services.getModels()
+    modelPickerList.value = list.map(id => ({ id, exists: existing.includes(id) }))
+    modelPickerSelected.value = {}
+    for (const m of modelPickerList.value) {
+      modelPickerSelected.value[m.id] = !m.exists
+    }
+    modelPickerVisible.value = true
+  } catch (e) {
+    showToast(e.message || '获取失败')
+  }
+}
+
+function confirmAddModels() {
+  let added = 0
+  for (const m of modelPickerList.value) {
+    if (modelPickerSelected.value[m.id] && !m.exists) {
+      window.services.addModel(m.id)
+      added++
+    }
+  }
+  modelPickerVisible.value = false
+  models.value = window.services.getModels()
+  showToast(added > 0 ? `已添加 ${added} 个模型` : '未选择新模型')
+}
+
 function providerLabel(type) {
-  const map = { 'openai-chat': 'Chat', 'openai-response': 'Response', 'anthropic-message': 'Anthropic' }
+  const map = { 'openai-chat': 'Chat', 'openai-response': 'Response', 'anthropic-message': 'Anthropic', 'newapi': 'NEW API' }
   return map[type] || type
 }
 
 function providerColor(type) {
-  const map = { 'openai-chat': '#10b981', 'openai-response': '#f59e0b', 'anthropic-message': '#8b5cf6' }
+  const map = { 'openai-chat': '#10b981', 'openai-response': '#f59e0b', 'anthropic-message': '#8b5cf6', 'newapi': '#06b6d4' }
   return map[type] || '#6b7280'
 }
 
@@ -100,7 +162,7 @@ let toastTimer = 0
 function showToast(msg) {
   toast.value = msg
   clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { toast.value = '' }, 2200)
+  toastTimer = setTimeout(() => { toast.value = '' }, 3500)
 }
 
 onMounted(loadData)
@@ -161,6 +223,7 @@ onMounted(loadData)
             </div>
           </div>
           <div class="pr-actions">
+            <button class="act-btn" @click="fetchProviderModels(p)">模型</button>
             <button class="act-btn" @click="copyProfile(p)">复制</button>
             <button class="act-btn" @click="navigate('ai-add', { editId: p.id })">编辑</button>
             <button class="act-btn danger" @click="confirmDelete(p.id)">删除</button>
@@ -181,6 +244,7 @@ onMounted(loadData)
             <span class="tip-pop">此处添加的模型 ID 仅用于 <code>/v1/models</code> 接口返回，客户端通过该接口获取可用模型列表</span>
           </span>
         </h3>
+        <button class="link-btn danger" v-if="models.length" @click="clearModels">清空</button>
       </div>
       <div class="card-body">
         <div class="model-chips" v-if="models.length > 0">
@@ -198,6 +262,52 @@ onMounted(loadData)
         />
       </div>
     </div>
+
+    <!-- Model Picker Modal -->
+    <Transition name="modal">
+      <div class="modal-overlay" v-if="modelPickerVisible" @click.self="modelPickerVisible = false">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3>选择要添加的模型</h3>
+            <button class="modal-close" @click="modelPickerVisible = false">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="modal-search">
+              <input
+                v-model="modelSearch"
+                type="text"
+                placeholder="搜索模型..."
+                class="search-input"
+              />
+            </div>
+            <div class="modal-actions">
+              <button class="link-btn" @click="selectAllModels">全选</button>
+              <button class="link-btn" @click="invertModelSelection">反选</button>
+            </div>
+            <label
+              v-for="m in filteredModelList"
+              :key="m.id"
+              class="modal-row"
+              :class="{ disabled: m.exists }"
+            >
+              <input
+                type="checkbox"
+                :checked="modelPickerSelected[m.id]"
+                :disabled="m.exists"
+                @change="modelPickerSelected[m.id] = $event.target.checked"
+              />
+              <span class="modal-model-id">{{ m.id }}</span>
+              <span class="modal-tag" v-if="m.exists">已存在</span>
+            </label>
+            <div class="modal-empty" v-if="filteredModelList.length === 0">无匹配结果</div>
+          </div>
+          <div class="modal-footer">
+            <button class="act-btn" @click="modelPickerVisible = false">取消</button>
+            <button class="btn-save" @click="confirmAddModels">确定添加</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -223,6 +333,9 @@ onMounted(loadData)
   font-size: 13px;
   font-weight: 500;
   border-radius: 10px;
+  white-space: pre-line;
+  text-align: center;
+  max-width: 380px;
   z-index: 999;
   box-shadow: 0 8px 24px rgba(0,0,0,.18);
   pointer-events: none;
@@ -392,6 +505,8 @@ onMounted(loadData)
   transition: color .15s;
 }
 .link-btn:hover { color: #4f46e5; }
+.link-btn.danger { color: #f87171; }
+.link-btn.danger:hover { color: #ef4444; }
 
 /* ===== Provider Row ===== */
 .provider-row {
@@ -605,4 +720,115 @@ onMounted(loadData)
   color: #fbbf24;
 }
 .tip-icon:hover .tip-pop { display: block; }
+
+/* ===== Modal ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+.modal-card {
+  width: calc(100% - 48px);
+  max-width: 400px;
+  max-height: 70vh;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.modal-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.modal-close {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 8px;
+  background: transparent; font-size: 20px; color: #94a3b8;
+  cursor: pointer; transition: all .15s;
+}
+.modal-close:hover { background: #f1f5f9; color: #475569; }
+
+.modal-body {
+  padding: 8px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-search { margin-bottom: 8px; }
+.search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  background: #f8fafc;
+  transition: all .15s;
+}
+.search-input:focus {
+  border-color: #a5b4fc;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(165,180,252,.1);
+}
+.modal-actions {
+  display: flex; gap: 12px; margin-bottom: 4px;
+}
+.modal-empty {
+  text-align: center; color: #cbd5e1; font-size: 13px; padding: 24px 0;
+}
+.modal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid #f8fafc;
+}
+.modal-row.disabled { cursor: not-allowed; opacity: .5; }
+.modal-row input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: #6366f1; cursor: pointer; flex-shrink: 0;
+}
+.modal-row.disabled input[type="checkbox"] { cursor: not-allowed; }
+.modal-model-id {
+  font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: #334155; flex: 1;
+  word-break: break-all;
+}
+.modal-tag {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  background: #fef9c3; color: #a16207; font-weight: 600; flex-shrink: 0;
+}
+.modal-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 14px 20px; border-top: 1px solid #f1f5f9;
+}
+
+.btn-save {
+  padding: 8px 18px;
+  border: none; border-radius: 8px;
+  background: #6366f1; color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .15s;
+}
+.btn-save:hover { background: #4f46e5; }
+
+.modal-enter-active,
+.modal-leave-active { transition: all .2s ease; }
+.modal-enter-from,
+.modal-leave-to { opacity: 0; }
+.modal-enter-from .modal-card { transform: scale(.95) translateY(8px); }
 </style>

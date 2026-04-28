@@ -37,6 +37,12 @@ function loadStats() {
   logs.value = window.services.getLogs(200)
 }
 
+function clearStats() {
+  if (!window.confirm('确定要清除所有统计数据吗？此操作不可恢复。')) return
+  window.services.clearLogs()
+  loadStats()
+}
+
 function statusLabel(code) {
   if (code >= 200 && code < 300) return 'success'
   if (code >= 400 && code < 500) return 'warn'
@@ -61,9 +67,35 @@ function timeAgo(ts) {
   return Math.floor(sec / 86400) + 'd'
 }
 
-const maxTrend = computed(() => {
-  if (!stats.value || !stats.value.trend.length) return 1
-  return Math.max(...stats.value.trend.map(d => d.count), 1)
+// Trend chart dimensions
+const CHART_W = 320
+const CHART_H = 100
+const PAD_L = 30
+const PAD_R = 16
+const PAD_T = 16
+const PAD_B = 20
+
+const trendData = computed(() => {
+  if (!stats.value || !stats.value.trend.length) return { points: '', circles: [], maxCount: 1, total: 0 }
+  const data = stats.value.trend
+  const maxCount = Math.max(...data.map(d => d.count), 1)
+  const w = CHART_W - PAD_L - PAD_R
+  const h = CHART_H - PAD_T - PAD_B
+  const total = data.reduce((s, d) => s + d.count, 0)
+
+  const points = data.map((d, i) => {
+    const x = PAD_L + (i / Math.max(data.length - 1, 1)) * w
+    const y = PAD_T + h - (d.count / maxCount) * h
+    return `${x},${y}`
+  }).join(' ')
+
+  const circles = data.map((d, i) => {
+    const x = PAD_L + (i / Math.max(data.length - 1, 1)) * w
+    const y = PAD_T + h - (d.count / maxCount) * h
+    return { x, y, count: d.count, date: d.date }
+  })
+
+  return { points, circles, maxCount, total }
 })
 
 onMounted(() => {
@@ -119,11 +151,25 @@ onMounted(() => {
       <div class="card">
         <div class="card-header">
           <h3>请求统计（近 30 天）</h3>
-          <button class="refresh-btn" @click="loadStats">刷新</button>
+          <div class="header-actions">
+            <button class="refresh-btn" @click="loadStats">刷新</button>
+            <button class="clear-btn" @click="clearStats">清除数据</button>
+          </div>
         </div>
         <div class="card-body">
           <div class="stat-big">{{ stats.totalRequests }}</div>
           <div class="stat-label">总请求数</div>
+        </div>
+      </div>
+
+      <!-- Per Provider -->
+      <div class="card" v-if="stats.byProvider && stats.byProvider.length">
+        <div class="card-header"><h3>提供商调用次数</h3></div>
+        <div class="card-body">
+          <div class="stat-row" v-for="p in stats.byProvider" :key="p.provider">
+            <span class="stat-name">{{ p.provider }}</span>
+            <span class="stat-val">{{ p.count }}</span>
+          </div>
         </div>
       </div>
 
@@ -153,19 +199,37 @@ onMounted(() => {
       <div class="card" v-if="stats.trend.length">
         <div class="card-header"><h3>30 天调用趋势</h3></div>
         <div class="card-body">
-          <div class="trend-chart">
-            <div
-              v-for="d in stats.trend"
-              :key="d.date"
-              class="trend-bar"
-              :style="{ height: Math.max(4, (d.count / maxTrend) * 80) + 'px' }"
-              :title="d.date + ': ' + d.count + ' 次'"
-            ></div>
+          <div class="trend-summary">
+            <span>日均 {{ Math.round(trendData.total / Math.max(stats.trend.length, 1)) }} 次</span>
+            <span>总计 {{ trendData.total }} 次</span>
           </div>
-          <div class="trend-labels">
-            <span>{{ stats.trend[0]?.date?.slice(5) || '' }}</span>
-            <span>{{ stats.trend[stats.trend.length-1]?.date?.slice(5) || '' }}</span>
-          </div>
+          <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" class="trend-svg">
+            <!-- Grid lines -->
+            <line v-for="i in 4" :key="'g'+i"
+              :x1="PAD_L" :y1="PAD_T + (CHART_H - PAD_T - PAD_B) * i / 4"
+              :x2="CHART_W - PAD_R" :y2="PAD_T + (CHART_H - PAD_T - PAD_B) * i / 4"
+              stroke="#f1f5f9" stroke-width="1" />
+            <!-- Fill area -->
+            <polygon
+              :points="`${PAD_L},${CHART_H - PAD_B} ${trendData.points} ${CHART_W - PAD_R},${CHART_H - PAD_B}`"
+              fill="url(#trendGrad)" />
+            <!-- Line -->
+            <polyline
+              :points="trendData.points"
+              fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <!-- Dots & Labels -->
+            <g v-for="c in trendData.circles" :key="c.date">
+              <circle :cx="c.x" :cy="c.y" r="3" fill="#6366f1" stroke="#fff" stroke-width="1.5" />
+              <text v-if="c.count > 0" :x="c.x" :y="c.y - 8" text-anchor="middle"
+                fill="#6366f1" font-size="9" font-weight="600">{{ c.count }}</text>
+            </g>
+            <defs>
+              <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#6366f1" stop-opacity="0.12" />
+                <stop offset="100%" stop-color="#6366f1" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+          </svg>
         </div>
       </div>
 
@@ -195,6 +259,7 @@ onMounted(() => {
               <span class="log-time">{{ timeAgo(l.timestamp) }}前</span>
             </div>
             <div class="log-meta">
+              <span>{{ l.provider || '-' }}</span>
               <span>{{ l.model }}</span>
               <span class="log-dur">{{ l.duration }}ms</span>
             </div>
@@ -293,18 +358,12 @@ onMounted(() => {
 .stat-val { font-size: 14px; font-weight: 700; color: #6366f1; font-family: 'SF Mono', monospace; }
 
 /* Trend Chart */
-.trend-chart {
-  display: flex; align-items: flex-end; gap: 2px; height: 80px;
+.trend-summary {
+  display: flex; gap: 16px; margin-bottom: 8px;
+  font-size: 12px; color: #94a3b8;
 }
-.trend-bar {
-  flex: 1; border-radius: 2px 2px 0 0;
-  background: #6366f1; opacity: .7; transition: opacity .15s;
-  min-width: 3px;
-}
-.trend-bar:hover { opacity: 1; }
-.trend-labels {
-  display: flex; justify-content: space-between;
-  font-size: 11px; color: #cbd5e1; margin-top: 6px;
+.trend-svg {
+  width: 100%; overflow: visible;
 }
 
 /* Logs */
@@ -339,12 +398,21 @@ onMounted(() => {
 }
 .link-btn:hover { color: #4f46e5; }
 
+.header-actions {
+  display: flex; gap: 6px;
+}
 .refresh-btn {
   padding: 3px 8px; border: 1px solid #e2e8f0; border-radius: 6px;
   background: #fff; font-size: 12px; color: #64748b; cursor: pointer;
   transition: all .15s;
 }
 .refresh-btn:hover { background: #f1f5f9; }
+.clear-btn {
+  padding: 3px 8px; border: 1px solid #fecaca; border-radius: 6px;
+  background: #fff; font-size: 12px; color: #ef4444; cursor: pointer;
+  transition: all .15s;
+}
+.clear-btn:hover { background: #fef2f2; }
 
 .field-hint {
   font-size: 12px; color: #94a3b8; margin: 6px 0 0;
