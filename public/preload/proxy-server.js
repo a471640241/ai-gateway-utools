@@ -119,13 +119,316 @@ function handleModels(_, res) {
   res.end(JSON.stringify({ object: 'list', data }))
 }
 
-// --- Converters (stubs — filled in Task 4) ---
+// --- Converter Registry ---
 
-// body converters: (body) => convertedBody
-// sse converters: (line) => convertedLine(s) — factory functions returning (line) => string
 const converters = {}
 
-// placeholder — real converters in Task 4
+// === Body Converters ===
+
+function convertChatToMessages(body) {
+  const { messages, ...rest } = body
+  const systemMsg = messages.find(m => m.role === 'system')
+  const nonSystem = messages.filter(m => m.role !== 'system')
+  const result = { ...rest, messages: nonSystem }
+  if (systemMsg) result.system = typeof systemMsg.content === 'string' ? systemMsg.content : ''
+  return result
+}
+
+function convertMessagesToChat(body) {
+  const { messages, system, ...rest } = body
+  const result = { ...rest, messages: [...messages] }
+  if (system) {
+    result.messages.unshift({ role: 'system', content: system })
+  }
+  return result
+}
+
+function convertChatToResponses(body) {
+  const { messages, ...rest } = body
+  const result = { ...rest, input: messages }
+  delete result.messages
+  return result
+}
+
+function convertResponsesToChat(body) {
+  const { input, ...rest } = body
+  const result = { ...rest, messages: input || [] }
+  delete result.input
+  return result
+}
+
+function convertMessagesToResponses(body) {
+  const { messages, system, ...rest } = body
+  const input = [...messages]
+  if (system) {
+    input.unshift({ role: 'system', content: system })
+  }
+  const result = { ...rest, input }
+  delete result.messages
+  return result
+}
+
+function convertResponsesToMessages(body) {
+  const { input, ...rest } = body
+  const msgs = input || []
+  const systemMsg = msgs.find(m => m.role === 'system')
+  const nonSystem = msgs.filter(m => m.role !== 'system')
+  const result = { ...rest, messages: nonSystem }
+  if (systemMsg) result.system = typeof systemMsg.content === 'string' ? systemMsg.content : ''
+  return result
+}
+
+// Register body converters
+converters['chat_completions->messages']   = { body: convertChatToMessages }
+converters['chat_completions->responses']  = { body: convertChatToResponses }
+converters['messages->chat_completions']   = { body: convertMessagesToChat }
+converters['messages->responses']          = { body: convertMessagesToResponses }
+converters['responses->chat_completions']  = { body: convertResponsesToChat }
+converters['responses->messages']          = { body: convertResponsesToMessages }
+
+// === SSE Helpers ===
+
+function counter() {
+  return () => {
+    counter._id = (counter._id || 0) + 1
+    return 'evt-' + Date.now() + '-' + counter._id
+  }
+}
+
+function fmtAnthropicSSE(event, data) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+function fmtOpenAISSE(data) {
+  return `data: ${JSON.stringify(data)}\n\n`
+}
+
+function mapFinishReason(reason) {
+  const map = { 'stop': 'end_turn', 'length': 'max_tokens', 'tool_calls': 'tool_use' }
+  return map[reason] || reason
+}
+
+// === SSE Converters (factory functions — each returns (line) => string) ===
+
+function chatToMessagesSSEFactory() {
+  let started = false
+  let messageId = 'msg_' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.startsWith('data: ')) return ''
+    if (line.startsWith('data: [DONE]')) return ''
+
+    try {
+      const data = JSON.parse(line.slice(6))
+      const choice = data.choices?.[0]
+      if (!choice) return ''
+
+      if (!started && data.model) model = data.model
+
+      if (!started) {
+        started = true
+        const role = choice.delta?.role || 'assistant'
+        return fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role, model, content: [] } }) +
+               fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
+               fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: choice.delta?.content || '' } })
+      }
+
+      if (choice.finish_reason) {
+        return fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+               fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: mapFinishReason(choice.finish_reason) }, usage: { output_tokens: 0 } }) +
+               fmtAnthropicSSE('message_stop', { type: 'message_stop' })
+      }
+
+      return fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: choice.delta?.content || '' } })
+    } catch {
+      return ''
+    }
+  }
+}
+
+function messagesToChatSSEFactory() {
+  let chatId = 'chatcmpl-' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.trim()) return ''
+
+    try {
+      if (line.startsWith('event: ')) return ''
+
+      if (!line.startsWith('data: ')) return ''
+      const data = JSON.parse(line.slice(6))
+
+      if (data.type === 'message_start') {
+        model = data.message?.model || model
+        chatId = 'chatcmpl-' + Date.now()
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+      }
+
+      if (data.type === 'content_block_delta') {
+        const text = data.delta?.text || ''
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })
+      }
+
+      if (data.type === 'content_block_stop') {
+        return ''
+      }
+
+      if (data.type === 'message_delta') {
+        const reason = data.delta?.stop_reason
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: {}, finish_reason: reason === 'end_turn' ? 'stop' : reason }] })
+      }
+
+      if (data.type === 'message_stop') {
+        return 'data: [DONE]\n\n'
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+function chatToResponsesSSEFactory() {
+  let responseId = 'resp_' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.startsWith('data: ')) return ''
+    if (line.startsWith('data: [DONE]')) return ''
+
+    try {
+      const data = JSON.parse(line.slice(6))
+      const choice = data.choices?.[0]
+      if (!choice) return ''
+
+      if (data.model) model = data.model
+
+      const delta = choice.delta
+      if (delta?.role) {
+        return fmtOpenAISSE({ type: 'response.created', response: { id: responseId, model } })
+      }
+      if (delta?.content) {
+        return fmtOpenAISSE({ type: 'response.output_text.delta', item_id: responseId, output_index: 0, content_index: 0, delta: delta.content })
+      }
+      if (choice.finish_reason) {
+        return fmtOpenAISSE({ type: 'response.completed', response: { id: responseId } }) + 'data: [DONE]\n\n'
+      }
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+function responsesToChatSSEFactory() {
+  let chatId = 'chatcmpl-' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.startsWith('data: ')) return ''
+    if (line.startsWith('data: [DONE]')) return ''
+
+    try {
+      const data = JSON.parse(line.slice(6))
+
+      if (data.type === 'response.created') {
+        model = data.response?.model || model
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+      }
+
+      if (data.type === 'response.output_text.delta') {
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { content: data.delta }, finish_reason: null }] })
+      }
+
+      if (data.type === 'response.completed') {
+        return fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n'
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+function messagesToResponsesSSEFactory() {
+  let responseId = 'resp_' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.trim()) return ''
+
+    try {
+      if (line.startsWith('event: ')) return ''
+
+      if (!line.startsWith('data: ')) return ''
+      const data = JSON.parse(line.slice(6))
+
+      if (data.type === 'message_start') {
+        model = data.message?.model || model
+        return fmtOpenAISSE({ type: 'response.created', response: { id: responseId, model } })
+      }
+
+      if (data.type === 'content_block_delta') {
+        return fmtOpenAISSE({ type: 'response.output_text.delta', item_id: responseId, output_index: 0, content_index: 0, delta: data.delta?.text || '' })
+      }
+
+      if (data.type === 'message_stop') {
+        return fmtOpenAISSE({ type: 'response.completed', response: { id: responseId } }) + 'data: [DONE]\n\n'
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+function responsesToMessagesSSEFactory() {
+  let messageId = 'msg_' + Date.now()
+  let model = ''
+
+  return (line) => {
+    if (!line.startsWith('data: ')) return ''
+    if (line.startsWith('data: [DONE]')) return ''
+
+    try {
+      const data = JSON.parse(line.slice(6))
+
+      if (data.type === 'response.created') {
+        model = data.response?.model || model
+        return fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role: 'assistant', model, content: [] } }) +
+               fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+      }
+
+      if (data.type === 'response.output_text.delta') {
+        return fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: data.delta } })
+      }
+
+      if (data.type === 'response.completed') {
+        return fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+               fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } }) +
+               fmtAnthropicSSE('message_stop', { type: 'message_stop' })
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+}
+
+// Register SSE converters
+converters['chat_completions->messages'].sseFactory   = chatToMessagesSSEFactory
+converters['chat_completions->responses'].sseFactory   = chatToResponsesSSEFactory
+converters['messages->chat_completions'].sseFactory    = messagesToChatSSEFactory
+converters['messages->responses'].sseFactory           = messagesToResponsesSSEFactory
+converters['responses->chat_completions'].sseFactory   = responsesToChatSSEFactory
+converters['responses->messages'].sseFactory           = responsesToMessagesSSEFactory
+
 function getBodyConverter(source, target) {
   if (source === target) return null
   const key = `${source}->${target}`
