@@ -93,10 +93,22 @@ window.services = {
       proxyManager.reload()
     }
     return models
+  },
+
+  // 注册状态变更回调（子进程崩溃时自动通知 UI）
+  onStatusChange(fn) {
+    this._statusListener = fn
   }
 }
 
 // 插件退出时清理子进程
 window.utools.onPluginOut(() => {
   proxyManager.stop()
+})
+
+// 子进程崩溃通知 → UI 状态回调
+proxyManager.setCrashCallback(() => {
+  if (window.services._statusListener) {
+    window.services._statusListener('stopped')
+  }
 })

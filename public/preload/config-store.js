@@ -29,7 +29,8 @@ function setProxySettings(settings) {
 
 function getProfiles() {
   const doc = window.utools.db.get(DB_KEYS.PROFILES)
-  return doc ? doc.data.profiles : []
+  const profiles = doc?.data?.profiles
+  return Array.isArray(profiles) ? profiles : []
 }
 
 function saveProfiles(profiles) {
@@ -103,7 +104,8 @@ function clearActiveProfile() {
 
 function getModels() {
   const doc = window.utools.db.get(DB_KEYS.MODELS)
-  return doc ? doc.data.models : []
+  const models = doc?.data?.models
+  return Array.isArray(models) ? models : []
 }
 
 function setModels(models) {

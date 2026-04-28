@@ -36,7 +36,6 @@ function save() {
 
   if (!form.value.name.trim()) { error.value = '请输入配置名称'; return }
   if (!form.value.baseUrl.trim()) { error.value = '请输入 Base URL'; return }
-  if (!form.value.apiKey.trim()) { error.value = '请输入 API Key'; return }
 
   form.value.baseUrl = form.value.baseUrl.replace(/\/+$/, '')
 
@@ -72,12 +71,12 @@ onMounted(() => {
 
     <div class="form">
       <div class="field">
-        <label>配置名称</label>
+        <label>配置名称 <span class="required">*</span></label>
         <input v-model="form.name" type="text" placeholder="如：我的 OpenAI" />
       </div>
 
       <div class="field">
-        <label>提供商类型</label>
+        <label>提供商类型 <span class="required">*</span></label>
         <select v-model="form.providerType">
           <option value="openai-chat">OpenAI Chat Completions</option>
           <option value="openai-response">OpenAI Responses</option>
@@ -86,12 +85,12 @@ onMounted(() => {
       </div>
 
       <div class="field">
-        <label>Base URL</label>
+        <label>Base URL <span class="required">*</span></label>
         <input v-model="form.baseUrl" type="text" placeholder="如：https://api.openai.com" />
       </div>
 
       <div class="field">
-        <label>API Key</label>
+        <label>API Key <span class="optional">(可选)</span></label>
         <div class="key-input">
           <input
             v-model="form.apiKey"
@@ -181,6 +180,17 @@ h3 {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+}
+
+.required {
+  color: #ef4444;
+  font-weight: 700;
+}
+
+.optional {
+  font-weight: 400;
+  color: #9ca3af;
+  font-size: 12px;
 }
 
 .error-msg {

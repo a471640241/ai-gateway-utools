@@ -8,6 +8,10 @@ const configStore = require('./config-store')
 
 let child = null
 let status = 'stopped' // 'stopped' | 'running'
+let stopping = false
+let crashCallback = null
+
+function setCrashCallback(fn) { crashCallback = fn }
 
 function getStatus() {
   return status
@@ -43,8 +47,13 @@ function start() {
     })
 
     child.on('exit', (code) => {
+      const wasCrash = !stopping
       status = 'stopped'
       child = null
+      stopping = false
+      if (wasCrash && crashCallback) {
+        crashCallback()
+      }
     })
 
     child.on('error', (err) => {
@@ -61,6 +70,7 @@ function start() {
 function stop() {
   return new Promise((resolve) => {
     if (child) {
+      stopping = true
       child.on('exit', () => {
         status = 'stopped'
         child = null
@@ -92,4 +102,4 @@ function restart() {
   return stop().then(() => start())
 }
 
-module.exports = { start, stop, reload, restart, getStatus, getPort }
+module.exports = { start, stop, reload, restart, getStatus, getPort, setCrashCallback }
