@@ -34,8 +34,9 @@ onMounted(() => {
     }
   })
   // 插件退出时停止代理子进程，避免遗留孤进程
-  window.utools.onPluginOut(() => {
-    if (window.services) {
+  // 注意：isKill=false 仅是插件隐藏，不应停代理；isKill=true 才是进程退出
+  window.utools.onPluginOut((isKill) => {
+    if (isKill && window.services) {
       window.services.stopProxy()
     }
     route.value = ''

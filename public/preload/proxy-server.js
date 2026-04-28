@@ -43,6 +43,48 @@ function readBody(req) {
   })
 }
 
+// --- Clean malformed client body ---
+// CherryStudio 等客户端会把未设置的字段发成 "[undefined]" 字符串值，需要过滤掉
+
+function cleanBody(body) {
+  if (!body || typeof body !== 'object') return body
+  if (Array.isArray(body)) return body.map(cleanBody)
+
+  const cleaned = {}
+  for (const [key, value] of Object.entries(body)) {
+    if (value === '[undefined]' || value === 'undefined') continue
+    if (Array.isArray(value)) {
+      cleaned[key] = value.map(item =>
+        typeof item === 'object' && item !== null ? cleanBody(item) : item
+      )
+    } else if (typeof value === 'object' && value !== null) {
+      cleaned[key] = cleanBody(value)
+    } else {
+      cleaned[key] = value
+    }
+  }
+  return cleaned
+}
+
+// 将 content 数组格式 [{ type: 'input_text', text: '...' }] 展平为纯字符串
+function flattenMessageContent(msg) {
+  if (!msg || typeof msg.content === 'string') return msg
+  if (Array.isArray(msg.content)) {
+    const text = msg.content
+      .filter(c => c.type === 'input_text' || c.type === 'text')
+      .map(c => c.text || '')
+      .join('')
+    return { ...msg, content: text }
+  }
+  return msg
+}
+
+function flattenBodyMessages(body) {
+  const msgArray = body.messages || body.input
+  if (!msgArray) return body
+  return { ...body, messages: msgArray.map(flattenMessageContent), input: msgArray.map(flattenMessageContent) }
+}
+
 // --- Forward request to upstream ---
 
 function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter) {
@@ -132,6 +174,24 @@ function handleModels(_, res) {
 
 const converters = {}
 
+// 各目标格式接受的字段白名单。只透传白名单内的字段，
+// 避免 CherryStudio 等客户端发出的 store/include/instructions 等
+// 专有字段被透传到不认识它们的上游 API。
+
+const TARGET_FIELDS = {
+  chat_completions: ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'frequency_penalty', 'presence_penalty', 'stop', 'n', 'logprobs', 'top_logprobs', 'user', 'messages'],
+  responses:        ['model', 'stream', 'temperature', 'top_p', 'max_output_tokens', 'store', 'instructions', 'input'],
+  messages:         ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'stop_sequences', 'top_k', 'system', 'messages']
+}
+
+function pickFields(body, allowed) {
+  const result = {}
+  for (const f of allowed) {
+    if (body[f] != null) result[f] = body[f]
+  }
+  return result
+}
+
 // === Body Converters ===
 
 function extractSystemContent(msg) {
@@ -147,14 +207,16 @@ function convertChatToMessages(body) {
   const { messages, ...rest } = body
   const systemMsg = messages.find(m => m.role === 'system')
   const nonSystem = messages.filter(m => m.role !== 'system')
-  const result = { ...rest, messages: nonSystem }
+  const result = pickFields(rest, TARGET_FIELDS.messages)
+  result.messages = nonSystem
   if (systemMsg) result.system = extractSystemContent(systemMsg)
   return result
 }
 
 function convertMessagesToChat(body) {
   const { messages, system, ...rest } = body
-  const result = { ...rest, messages: [...messages] }
+  const result = pickFields(rest, TARGET_FIELDS.chat_completions)
+  result.messages = [...messages]
   if (system) {
     result.messages.unshift({ role: 'system', content: system })
   }
@@ -163,15 +225,16 @@ function convertMessagesToChat(body) {
 
 function convertChatToResponses(body) {
   const { messages, ...rest } = body
-  const result = { ...rest, input: messages }
-  delete result.messages
+  const result = pickFields(rest, TARGET_FIELDS.responses)
+  result.input = messages
   return result
 }
 
 function convertResponsesToChat(body) {
   const { input, ...rest } = body
-  const result = { ...rest, messages: input || [] }
-  delete result.input
+  const result = pickFields(rest, TARGET_FIELDS.chat_completions)
+  if (rest.max_output_tokens != null) result.max_tokens = rest.max_output_tokens
+  result.messages = input || []
   return result
 }
 
@@ -181,8 +244,8 @@ function convertMessagesToResponses(body) {
   if (system) {
     input.unshift({ role: 'system', content: system })
   }
-  const result = { ...rest, input }
-  delete result.messages
+  const result = pickFields(rest, TARGET_FIELDS.responses)
+  result.input = input
   return result
 }
 
@@ -191,7 +254,9 @@ function convertResponsesToMessages(body) {
   const msgs = input || []
   const systemMsg = msgs.find(m => m.role === 'system')
   const nonSystem = msgs.filter(m => m.role !== 'system')
-  const result = { ...rest, messages: nonSystem }
+  const result = pickFields(rest, TARGET_FIELDS.messages)
+  if (rest.max_output_tokens != null) result.max_tokens = rest.max_output_tokens
+  result.messages = nonSystem
   if (systemMsg) result.system = extractSystemContent(systemMsg)
   return result
 }
@@ -488,6 +553,10 @@ async function handleApiRequest(req, res) {
     res.end(JSON.stringify({ error: 'Invalid JSON body' }))
     return
   }
+
+  // Clean malformed body: strip "[undefined]" strings, flatten input_text content arrays
+  body = cleanBody(body)
+  body = flattenBodyMessages(body)
 
   // Fill default model
   if (!body.model && profile.defaultModel) {

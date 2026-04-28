@@ -19,7 +19,7 @@ const showKey = ref(false)
 const saving = ref(false)
 const error = ref('')
 
-const title = computed(() => isEdit.value ? '编辑配置' : '添加配置')
+const title = computed(() => isEdit.value ? '编辑提供商' : '添加提供商')
 
 function loadProfile(id) {
   const profiles = window.services.getProfiles()
@@ -33,12 +33,9 @@ function loadProfile(id) {
 
 function save() {
   error.value = ''
-
   if (!form.value.name.trim()) { error.value = '请输入配置名称'; return }
   if (!form.value.baseUrl.trim()) { error.value = '请输入 Base URL'; return }
-
   form.value.baseUrl = form.value.baseUrl.replace(/\/+$/, '')
-
   saving.value = true
   try {
     if (isEdit.value) {
@@ -54,10 +51,6 @@ function save() {
   }
 }
 
-function cancel() {
-  navigate('ai')
-}
-
 onMounted(() => {
   if (pagePayload.value && pagePayload.value.editId) {
     loadProfile(pagePayload.value.editId)
@@ -66,142 +59,205 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page profile-edit">
-    <h3>{{ title }}</h3>
+  <div class="editor">
+    <div class="page-header">
+      <button class="back-link" @click="navigate('ai')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        返回
+      </button>
+      <h2>{{ title }}</h2>
+    </div>
 
-    <div class="form">
-      <div class="field">
-        <label>配置名称 <span class="required">*</span></label>
-        <input v-model="form.name" type="text" placeholder="如：我的 OpenAI" />
-      </div>
+    <div class="card">
+      <div class="card-body">
+        <div class="fields">
+          <div class="field">
+            <label>配置名称 <span class="req">*</span></label>
+            <input v-model="form.name" type="text" placeholder="如：我的 OpenAI" />
+          </div>
 
-      <div class="field">
-        <label>提供商类型 <span class="required">*</span></label>
-        <select v-model="form.providerType">
-          <option value="openai-chat">OpenAI Chat Completions</option>
-          <option value="openai-response">OpenAI Responses</option>
-          <option value="anthropic-message">Anthropic Messages</option>
-        </select>
-      </div>
+          <div class="field">
+            <label>提供商类型 <span class="req">*</span></label>
+            <select v-model="form.providerType">
+              <option value="openai-chat">OpenAI Chat Completions</option>
+              <option value="openai-response">OpenAI Responses</option>
+              <option value="anthropic-message">Anthropic Messages</option>
+            </select>
+          </div>
 
-      <div class="field">
-        <label>Base URL <span class="required">*</span></label>
-        <input v-model="form.baseUrl" type="text" placeholder="如：https://api.openai.com" />
-      </div>
+          <div class="field">
+            <label>Base URL <span class="req">*</span></label>
+            <input v-model="form.baseUrl" type="text" placeholder="如：https://api.openai.com" />
+          </div>
 
-      <div class="field">
-        <label>API Key <span class="optional">(可选)</span></label>
-        <div class="key-input">
-          <input
-            v-model="form.apiKey"
-            :type="showKey ? 'text' : 'password'"
-            placeholder="sk-..."
-          />
-          <button type="button" class="btn-toggle" @click="showKey = !showKey">
-            {{ showKey ? '隐藏' : '显示' }}
-          </button>
+          <div class="field">
+            <label>API Key <span class="opt">(可选)</span></label>
+            <div class="key-row">
+              <input v-model="form.apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." />
+              <button type="button" class="toggle-key" @click="showKey = !showKey">
+                {{ showKey ? '隐藏' : '显示' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>默认模型 <span class="opt">(可选)</span></label>
+            <input v-model="form.defaultModel" type="text" placeholder="如：gpt-4o" />
+          </div>
+
+          <div class="error" v-if="error">{{ error }}</div>
+
+          <div class="actions">
+            <button type="button" class="btn-cancel" @click="navigate('ai')">取消</button>
+            <button type="button" class="btn-save" :disabled="saving" @click="save">
+              {{ saving ? '保存中...' : '保存' }}
+            </button>
+          </div>
         </div>
-      </div>
-
-      <div class="field">
-        <label>默认模型（可选）</label>
-        <input v-model="form.defaultModel" type="text" placeholder="如：gpt-4o" />
-      </div>
-
-      <div class="field error-msg" v-if="error">{{ error }}</div>
-
-      <div class="form-actions">
-        <button class="btn" @click="cancel">取消</button>
-        <button class="btn-primary" @click="save" :disabled="saving">
-          {{ saving ? '保存中...' : '保存' }}
-        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.profile-edit {
+.editor {
   padding: 16px;
-  max-width: 480px;
+  max-width: 540px;
   margin: 0 auto;
 }
 
-h3 {
-  margin: 0 0 16px;
-  font-size: 18px;
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
-.form {
+.page-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.back-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: #f1f5f9;
+  font-size: 13px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all .15s;
+}
+.back-link:hover { background: #e2e8f0; color: #334155; }
+
+.card {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.card-body { padding: 20px; }
+
+.fields {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .field label {
   font-size: 13px;
-  font-weight: 500;
-  color: #555;
+  font-weight: 600;
+  color: #475569;
 }
 
-.field input, .field select {
-  padding: 8px 10px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+.req { color: #ef4444; font-weight: 700; }
+.opt { font-weight: 400; color: #94a3b8; font-size: 12px; }
+
+.field input,
+.field select {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: all .15s;
+  background: #f8fafc;
+  color: #334155;
+}
+.field input:focus,
+.field select:focus {
+  border-color: #a5b4fc;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(165,180,252,.15);
 }
 
-.field input:focus, .field select:focus {
-  border-color: #1976d2;
-}
-
-.key-input {
+.key-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
+.key-row input { flex: 1; }
 
-.key-input input {
-  flex: 1;
-}
-
-.btn-toggle {
-  padding: 8px 12px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+.toggle-key {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   background: #fff;
   font-size: 13px;
+  color: #64748b;
   cursor: pointer;
   white-space: nowrap;
+  transition: all .15s;
 }
+.toggle-key:hover { background: #f1f5f9; }
 
-.required {
+.error {
   color: #ef4444;
-  font-weight: 700;
-}
-
-.optional {
-  font-weight: 400;
-  color: #9ca3af;
-  font-size: 12px;
-}
-
-.error-msg {
-  color: #d32f2f;
   font-size: 13px;
+  font-weight: 500;
 }
 
-.form-actions {
+.actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  margin-top: 8px;
+  margin-top: 4px;
 }
+
+.btn-cancel {
+  padding: 10px 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-cancel:hover { background: #f8fafc; }
+
+.btn-save {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 10px;
+  background: #6366f1;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-save:hover { background: #4f46e5; }
+.btn-save:disabled { opacity: .5; cursor: not-allowed; }
 </style>

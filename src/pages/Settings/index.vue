@@ -15,10 +15,7 @@ function loadSettings() {
 
 function saveSettings() {
   const portNum = parseInt(port.value, 10)
-  if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-    port.value = 9999
-    return
-  }
+  if (isNaN(portNum) || portNum < 1 || portNum > 65535) { port.value = 9999; return }
   window.services.setSettings({ port: portNum, autoStart: autoStart.value })
   saved.value = true
   setTimeout(() => saved.value = false, 1500)
@@ -29,23 +26,28 @@ onMounted(loadSettings)
 
 <template>
   <div class="settings">
-    <div class="settings-header">
-      <h3>设置</h3>
-      <button class="btn-back" @click="navigate('ai')">&larr; 返回</button>
+    <div class="page-header">
+      <button class="back-link" @click="navigate('ai')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        返回
+      </button>
+      <h2>设置</h2>
     </div>
 
-    <div class="form">
-      <div class="field">
-        <label>代理端口</label>
+    <div class="card">
+      <div class="card-header"><h3>代理端口</h3></div>
+      <div class="card-body">
         <div class="field-row">
           <input v-model.number="port" type="number" min="1" max="65535" @change="saveSettings" />
-          <span class="saved-hint" v-if="saved">&check; 已保存</span>
+          <span class="saved" v-if="saved">&check; 已保存</span>
         </div>
       </div>
+    </div>
 
-      <div class="field">
-        <label class="checkbox-card">
-          <input type="checkbox" v-model="autoStart" @change="saveSettings" />
+    <div class="card">
+      <div class="card-body">
+        <label class="check-field" @change="saveSettings">
+          <input type="checkbox" v-model="autoStart" />
           <span>启动 uTools 时自动开启代理</span>
         </label>
       </div>
@@ -55,112 +57,106 @@ onMounted(loadSettings)
 
 <style scoped>
 .settings {
-  padding: 20px;
-  max-width: 420px;
+  padding: 16px;
+  max-width: 540px;
   margin: 0 auto;
 }
 
-.settings-header {
+.page-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
-.settings-header h3 {
+.page-header h2 {
   font-size: 18px;
   font-weight: 700;
-  color: #1f2937;
+  color: #1e293b;
   margin: 0;
 }
 
-.btn-back {
-  padding: 6px 14px;
-  border: 1px solid #e5e7eb;
+.back-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
   border-radius: 8px;
-  background: #fff;
+  background: #f1f5f9;
   font-size: 13px;
-  color: #6b7280;
+  color: #64748b;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all .15s;
 }
-.btn-back:hover {
-  background: #f3f4f6;
-  color: #374151;
+.back-link:hover { background: #e2e8f0; color: #334155; }
+
+/* Card */
+.card {
+  margin-bottom: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
 }
 
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+.card-header {
+  padding: 16px 16px 0;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field > label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #6b7280;
+.card-header h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: .6px;
+}
+
+.card-body {
+  padding: 14px 16px;
 }
 
 .field-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
-.field input[type="number"] {
+.field-row input[type="number"] {
   padding: 10px 14px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e2e8f0;
   border-radius: 10px;
   font-size: 15px;
   font-weight: 500;
   font-family: 'SF Mono', 'Fira Code', monospace;
   outline: none;
-  width: 140px;
-  transition: border-color 0.15s;
-  background: #f9fafb;
+  width: 130px;
+  transition: all .15s;
+  background: #f8fafc;
 }
-.field input[type="number"]:focus {
-  border-color: #2563eb;
+.field-row input[type="number"]:focus {
+  border-color: #a5b4fc;
   background: #fff;
+  box-shadow: 0 0 0 3px rgba(165,180,252,.15);
 }
 
-.saved-hint {
-  font-size: 12px;
+.saved {
+  font-size: 13px;
   color: #22c55e;
   font-weight: 500;
 }
 
-.checkbox-card {
+.check-field {
   display: flex;
   align-items: center;
   gap: 10px;
   cursor: pointer;
   font-size: 14px;
-  font-weight: 400;
-  color: #374151;
-  padding: 12px 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: #fff;
-  transition: all 0.15s;
-  text-transform: none;
-  letter-spacing: 0;
+  color: #334155;
 }
-.checkbox-card:hover {
-  border-color: #d1d5db;
-}
-.checkbox-card input[type="checkbox"] {
+.check-field input[type="checkbox"] {
   width: 18px;
   height: 18px;
-  accent-color: #2563eb;
+  accent-color: #6366f1;
   cursor: pointer;
 }
 </style>

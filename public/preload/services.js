@@ -117,7 +117,9 @@ window.services = {
   }
 }
 
-// 插件退出时清理子进程
-window.utools.onPluginOut(() => {
-  proxyManager.stop()
+// 仅在进程退出时清理子进程（isKill=true），插件隐藏时保持代理运行
+window.utools.onPluginOut((isKill) => {
+  if (isKill) {
+    proxyManager.stop()
+  }
 })
