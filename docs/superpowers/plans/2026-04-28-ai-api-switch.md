@@ -58,7 +58,7 @@ rm src/Write/index.vue
 rmdir src/Hello src/Read src/Write 2>/dev/null || true
 ```
 
-- [ ] **Step 3: 重写 App.vue（provide/inject 路由 + onPluginOut 停代理）**
+- [ ] **Step 3: 重写 App.vue（provide/inject 路由 + onPluginOut 停代理 + autoStart 自动启动）**
 
 ```vue
 <script setup>
@@ -83,6 +83,14 @@ provide('pagePayload', pagePayload)
 onMounted(() => {
   window.utools.onPluginEnter((action) => {
     navigate(action.code, action.payload)
+    // 自动启动：若 autoStart 开启且代理未运行则自动启动
+    if (window.services) {
+      const settings = window.services.getSettings()
+      const status = window.services.getProxyStatus()
+      if (settings.autoStart && status.status !== 'running') {
+        window.services.startProxy()
+      }
+    }
   })
   // 插件退出时停止代理子进程，避免遗留孤进程
   window.utools.onPluginOut(() => {
@@ -2011,3 +2019,4 @@ git commit -m "feat: add global styles - CSS variables, button variants, layout 
 - [ ] 未启用配置时，API 请求返回 503
 - [ ] 编辑当前启用配置后，代理自动 reload 使用新配置
 - [ ] 停止代理后 API 请求被拒绝（端口不可达）
+- [ ] 开启 autoStart 后，退出并重新进入插件 → 代理自动启动

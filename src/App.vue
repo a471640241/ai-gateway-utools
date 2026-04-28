@@ -18,6 +18,11 @@ provide('navigate', navigate)
 provide('pagePayload', pagePayload)
 
 onMounted(() => {
+  if (!window.utools) {
+    // 非 uTools 环境（浏览器直接打开），显示占位提示
+    route.value = 'no-utools'
+    return
+  }
   window.utools.onPluginEnter((action) => {
     navigate(action.code, action.payload)
   })
@@ -35,10 +40,24 @@ onMounted(() => {
   <template v-if="route === 'ai'">
     <Home />
   </template>
-  <template v-if="route === 'ai-add'">
+  <template v-else-if="route === 'ai-add'">
     <ProfileEdit />
   </template>
-  <template v-if="route === 'ai-set'">
+  <template v-else-if="route === 'ai-set'">
     <Settings />
   </template>
+  <div v-else class="placeholder">
+    <p v-if="route === 'no-utools'">请在 uTools 中打开此插件</p>
+  </div>
 </template>
+
+<style scoped>
+.placeholder {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  color: #999;
+  font-size: 14px;
+}
+</style>
