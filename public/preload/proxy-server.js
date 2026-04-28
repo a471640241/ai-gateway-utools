@@ -82,7 +82,7 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
       let buffer = ''
       upstreamRes.on('data', (chunk) => {
         buffer += chunk.toString()
-        const lines = buffer.split('\n')
+        const lines = buffer.split(/\r?\n/)
         buffer = lines.pop() || ''
 
         for (const line of lines) {
