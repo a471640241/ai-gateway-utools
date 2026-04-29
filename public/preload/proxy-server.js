@@ -838,6 +838,10 @@ function logRequest(endpoint, model, statusCode, duration, error, requestBody, r
     data.requestBody = requestBody ? JSON.stringify(requestBody) : null
     data.responseBody = responseBody || null
   }
+  // 404 请求始终记录路径和请求体（用于排查问题）
+  if (statusCode === 404 && requestBody) {
+    data.requestBody = JSON.stringify(requestBody)
+  }
   // 解析 token 使用量
   if (responseBody) {
     try {
@@ -876,8 +880,15 @@ const server = http.createServer(async (req, res) => {
       }
       await handleApiRequest(req, res)
     } else {
+      // 尝试读取请求体用于日志记录
+      let bodyForLog = null
+      try {
+        bodyForLog = await readBody(req)
+      } catch {}
+
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Not Found' }))
+      logRequest(endpoint, '-', 404, Date.now() - startTime, 'route_not_found', bodyForLog, null)
     }
   } catch (err) {
     if (!res.headersSent) {

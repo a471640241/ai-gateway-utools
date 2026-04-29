@@ -123,7 +123,7 @@ onMounted(() => {
 <style scoped>
 .editor {
   padding: 16px;
-  max-width: 540px;
+  max-width: 780px;
   margin: 0 auto;
 }
 

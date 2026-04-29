@@ -16,6 +16,7 @@ const heatMode = ref('requests')  // 'requests' | 'tokens'
 const logSearch = ref({ provider: '', model: '', dateFrom: '', dateTo: '' })
 const logPage = ref(1)
 const logPageSize = ref(5)
+const trendHover = ref(null) // { x, y, date, count, tokens }
 
 function loadSettings() {
   const s = window.services.getSettings()
@@ -62,7 +63,7 @@ function fmtTok(n) {
   return String(n)
 }
 
-const CHART_W=400; const CHART_H=200; const PAD_L=44; const PAD_R=16; const PAD_T=16; const PAD_B=36
+const CHART_W=400; const CHART_H=200; const PAD_L=36; const PAD_R=32; const PAD_T=16; const PAD_B=36
 function fmtLocal(ts) {
   const d = new Date(ts)
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
@@ -102,23 +103,37 @@ const heatmapData = computed(() => {
   return {columns,months}
 })
 
-function smoothPath(pts, w, h) {
+const BOTTOM_Y = CHART_H - PAD_B
+function smoothPath(pts) {
   if (pts.length < 2) { const p=pts[0]||{x:0,y:0}; return `M${p.x},${p.y}` }
+  const clampY = y => Math.min(Math.max(y, PAD_T), BOTTOM_Y)
   let d=''
   for (let i=0; i<pts.length-1; i++) {
     const p0=pts[i===0?0:i-1], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||p2
-    const cp1x=p1.x+(p2.x-p0.x)/6, cp1y=p1.y+(p2.y-p0.y)/6
-    const cp2x=p2.x-(p3.x-p1.x)/6, cp2y=p2.y-(p3.y-p1.y)/6
+    const cp1x=p1.x+(p2.x-p0.x)/6, cp1y=clampY(p1.y+(p2.y-p0.y)/6)
+    const cp2x=p2.x-(p3.x-p1.x)/6, cp2y=clampY(p2.y-(p3.y-p1.y)/6)
     d+= i===0?`M${p1.x},${p1.y} C${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`:`S${cp2x},${cp2y} ${p2.x},${p2.y}`
   }
   return d
 }
 
+function niceMax(v) {
+  if (v <= 0) return 1
+  const mag = Math.pow(10, Math.floor(Math.log10(v)))
+  const norm = v / mag
+  if (norm <= 1) return mag
+  if (norm <= 2) return 2 * mag
+  if (norm <= 5) return 5 * mag
+  return 10 * mag
+}
+
 const trendData = computed(() => {
-  if (!stats.value||!stats.value.trend.length) return {reqPath:'',reqFill:'',tokPath:'',tokFill:'',circles:[],maxCount:1,maxTokens:1,total:0,totalTokens:0,yTicks:[],yTicksTok:[]}
+  if (!stats.value||!stats.value.trend.length) return {reqPath:'',reqFill:'',tokPath:'',tokFill:'',circles:[],tokCircles:[],maxCount:1,maxTokens:1,total:0,totalTokens:0,yTicks:[],yTicksTok:[]}
   const d=stats.value.trend
-  const mc=Math.max(...d.map(x=>x.count),1)
-  const mt=Math.max(...d.map(x=>x.tokens),1)
+  const rawMc=Math.max(...d.map(x=>x.count),1)
+  const rawMt=Math.max(...d.map(x=>x.tokens),1)
+  const mc=niceMax(rawMc)
+  const mt=niceMax(rawMt)
   const w=CHART_W-PAD_L-PAD_R; const h=CHART_H-PAD_T-PAD_B
   const total=d.reduce((s,x)=>s+x.count,0)
   const totalTokens=d.reduce((s,x)=>s+x.tokens,0)
@@ -135,14 +150,15 @@ const trendData = computed(() => {
   // Token 线
   const tokPts=d.map((x,i)=>({
     x:PAD_L+(i/Math.max(d.length-1,1))*w,
-    y:PAD_T+h-(x.tokens/mt)*h
+    y:PAD_T+h-(x.tokens/mt)*h,
+    count:x.count,tokens:x.tokens,date:x.date
   }))
   const tokPath=smoothPath(tokPts)
   const tokFill=tokPath+` L${tokPts[tokPts.length-1].x},${CHART_H-PAD_B} L${tokPts[0].x},${CHART_H-PAD_B} Z`
 
   const yTicks=[0,Math.round(mc/2),mc]
   const yTicksTok=[0,Math.round(mt/2),mt]
-  return {reqPath,reqFill,tokPath,tokFill,circles:reqPts,maxCount:mc,maxTokens:mt,total,totalTokens,yTicks,yTicksTok}
+  return {reqPath,reqFill,tokPath,tokFill,circles:reqPts,tokCircles:tokPts,maxCount:mc,maxTokens:mt,total,totalTokens,yTicks,yTicksTok}
 })
 
 const filteredLogs = computed(() => {
@@ -179,6 +195,18 @@ const providerTokenMap = computed(() => {
   return m
 })
 
+let copyTimer = 0
+const copyMsg = ref('')
+function copyText(text, label) {
+  const el = document.createElement('textarea')
+  el.value = text; el.style.position = 'fixed'; el.style.left = '-9999px'
+  document.body.appendChild(el); el.select(); document.execCommand('copy')
+  document.body.removeChild(el)
+  copyMsg.value = label + '复制成功'
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyMsg.value = '' }, 1500)
+}
+
 function resetLogPage() { logPage.value = 1 }
 
 onMounted(()=>{loadSettings();loadStats()})
@@ -186,6 +214,9 @@ onMounted(()=>{loadSettings();loadStats()})
 
 <template>
   <div class="settings">
+    <Transition name="fade">
+      <div class="copy-toast" v-if="copyMsg">{{ copyMsg }}</div>
+    </Transition>
     <div class="page-header">
       <button class="back-link" @click="navigate('ai')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
@@ -364,17 +395,30 @@ onMounted(()=>{loadSettings();loadStats()})
                   text-anchor="start" fill="#f59e0b" font-size="9" font-family="SF Mono, monospace">{{ fmtTok(t) }}</text>
                 <!-- Token area + line -->
                 <path :d="trendData.tokFill" fill="url(#tokAreaGrad)"/>
-                <path :d="trendData.tokPath" fill="none" stroke="url(#tokLineGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path :d="trendData.tokPath" fill="none" stroke="url(#tokLineGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <!-- Request area + line -->
                 <path :d="trendData.reqFill" fill="url(#reqAreaGrad)"/>
-                <path :d="trendData.reqPath" fill="none" stroke="url(#reqLineGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path :d="trendData.reqPath" fill="none" stroke="url(#reqLineGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 <!-- X axis -->
                 <line :x1="PAD_L" :y1="CHART_H-PAD_B" :x2="CHART_W-PAD_R" :y2="CHART_H-PAD_B" stroke="#e2e8f0" stroke-width="1"/>
-                <!-- Data points and X labels -->
-                <g v-for="(c,idx) in trendData.circles" :key="c.date">
-                  <circle :cx="c.x" :cy="c.y" r="4" fill="#fff" stroke="#6366f1" stroke-width="2"/>
+                <!-- Token data points -->
+                <circle v-for="(c,idx) in trendData.tokCircles" :key="'t'+idx" :cx="c.x" :cy="c.y" r="8" fill="transparent" stroke="none"
+                  @mouseenter="trendHover = c" @mouseleave="trendHover = null"/>
+                <circle v-for="(c,idx) in trendData.tokCircles" :key="'td'+idx" :cx="c.x" :cy="c.y" r="2.5" :fill="trendHover&&trendHover.date===c.date?'#f59e0b':'#fff'" :stroke="'#f59e0b'" stroke-width="1.5" style="pointer-events:none"/>
+                <!-- Request data points and X labels -->
+                <g v-for="(c,idx) in trendData.circles" :key="'r'+c.date">
+                  <circle :cx="c.x" :cy="c.y" r="8" fill="transparent" stroke="none"
+                    @mouseenter="trendHover = c" @mouseleave="trendHover = null"/>
+                  <circle :cx="c.x" :cy="c.y" r="2.5" :fill="trendHover&&trendHover.date===c.date?'#6366f1':'#fff'" :stroke="'#6366f1'" stroke-width="1.5" style="pointer-events:none"/>
                   <text :x="c.x" :y="CHART_H-PAD_B+16" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="SF Mono, monospace"
                     v-if="idx%Math.ceil(trendData.circles.length/7)===0||idx===trendData.circles.length-1">{{ c.date.slice(5) }}</text>
+                </g>
+                <!-- Hover tooltip -->
+                <g v-if="trendHover">
+                  <line :x1="trendHover.x" :y1="PAD_T" :x2="trendHover.x" :y2="CHART_H-PAD_B" stroke="#94a3b8" stroke-width="0.5" stroke-dasharray="3,3"/>
+                  <rect :x="Math.min(trendHover.x+8, CHART_W-PAD_R-100)" :y="Math.max(PAD_T, trendHover.y-36)" width="96" height="30" rx="6" fill="#1e293b" opacity="0.92"/>
+                  <text :x="Math.min(trendHover.x+14, CHART_W-PAD_R-94)" :y="Math.max(PAD_T+10, trendHover.y-24)" fill="#e2e8f0" font-size="10" font-family="SF Mono, monospace">{{ trendHover.date.slice(5) }}</text>
+                  <text :x="Math.min(trendHover.x+14, CHART_W-PAD_R-94)" :y="Math.max(PAD_T+22, trendHover.y-12)" fill="#94a3b8" font-size="9" font-family="SF Mono, monospace">{{ trendHover.count }}次 / {{ fmtTok(trendHover.tokens) }}</text>
                 </g>
               </svg>
             </div>
@@ -462,8 +506,8 @@ onMounted(()=>{loadSettings();loadStats()})
               <div class="log-err" v-if="l.error">{{ l.error }}</div>
               <details class="log-detail" v-if="l.requestBody || l.responseBody">
                 <summary>查看参数</summary>
-                <div class="log-body" v-if="l.requestBody"><span class="log-body-label">请求</span><pre>{{ l.requestBody }}</pre></div>
-                <div class="log-body" v-if="l.responseBody"><span class="log-body-label">响应</span><pre>{{ l.responseBody }}</pre></div>
+                <div class="log-body" v-if="l.requestBody"><span class="log-body-label">请求</span><button class="copy-body-btn" @click="copyText(l.requestBody, '请求参数')">复制</button><pre>{{ l.requestBody }}</pre></div>
+                <div class="log-body" v-if="l.responseBody"><span class="log-body-label">响应</span><button class="copy-body-btn" @click="copyText(l.responseBody, '响应参数')">复制</button><pre>{{ l.responseBody }}</pre></div>
               </details>
             </div>
           </div>
@@ -621,6 +665,12 @@ onMounted(()=>{loadSettings();loadStats()})
 .log-detail summary { font-size: 12px; color: #6366f1; cursor: pointer; user-select: none; }
 .log-body { margin-top: 8px; }
 .log-body-label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .5px; }
+.copy-body-btn { margin-left: 8px; padding: 1px 7px; border: 1px solid #e2e8f0; border-radius: 4px; background: #fff; font-size: 11px; color: #64748b; cursor: pointer; transition: all .15s; }
+.copy-body-btn:hover { background: #f1f5f9; color: #334155; }
+.copy-toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 999; padding: 8px 20px; border-radius: 10px; font-size: 13px; font-weight: 500; color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; box-shadow: 0 4px 16px rgba(0,0,0,.1); pointer-events: none; }
+.fade-enter-active { transition: all .2s ease-out; }
+.fade-leave-active { transition: all .15s ease-in; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 .log-body pre { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 11px; font-family: 'SF Mono',monospace; color: #475569; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
 
 .about { text-align: center; padding: 32px 16px; color: #94a3b8; font-size: 13px; line-height: 1.8; }

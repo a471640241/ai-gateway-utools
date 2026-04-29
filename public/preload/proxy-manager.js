@@ -145,7 +145,20 @@ function getStats() {
     }
   }
 
+  // 补全近30天空数据
+  const today = new Date(); today.setHours(0,0,0,0)
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400000)
+    const ds = fmtLocalDate(d.getTime())
+    if (!byDay[ds]) byDay[ds] = 0
+    if (!byDayTokens[ds]) byDayTokens[ds] = 0
+  }
+
   const trend = Object.entries(byDay)
+    .filter(([date]) => {
+      const d = new Date(date); d.setHours(0,0,0,0)
+      return d >= new Date(today.getTime() - 29 * 86400000)
+    })
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([date, count]) => ({ date, count, tokens: byDayTokens[date] || 0 }))
 

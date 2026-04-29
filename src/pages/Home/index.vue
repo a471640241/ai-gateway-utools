@@ -149,7 +149,7 @@ function confirmAddModels() {
 }
 
 function providerLabel(type) {
-  const map = { 'openai-chat': 'Chat', 'openai-response': 'Response', 'anthropic-message': 'Anthropic', 'newapi': 'NEW API' }
+  const map = { 'openai-chat': 'OpenAI Chat', 'openai-response': 'OpenAI Response', 'anthropic-message': 'Anthropic', 'newapi': 'NEW API' }
   return map[type] || type
 }
 
@@ -315,7 +315,7 @@ onMounted(loadData)
 /* ===== Page ===== */
 .home {
   padding: 16px;
-  max-width: 540px;
+  max-width: 780px;
   margin: 0 auto;
   min-height: 100vh;
   position: relative;
@@ -465,7 +465,6 @@ onMounted(loadData)
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   background: #fff;
-  overflow: hidden;
 }
 
 .card-header {
@@ -686,10 +685,10 @@ onMounted(loadData)
 .tip-pop {
   display: none;
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 260px;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 240px;
   padding: 10px 13px;
   background: #1e293b;
   color: #e2e8f0;
@@ -706,11 +705,11 @@ onMounted(loadData)
 .tip-pop::after {
   content: '';
   position: absolute;
-  top: 100%;
-  left: 50%;
-  margin-left: -5px;
+  right: 100%;
+  top: 50%;
+  margin-top: -5px;
   border: 5px solid transparent;
-  border-top-color: #1e293b;
+  border-right-color: #1e293b;
 }
 .tip-pop code {
   font-family: monospace;
