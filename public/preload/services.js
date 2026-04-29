@@ -179,6 +179,10 @@ window.services = {
     proxyManager.clearLogs()
   },
 
+  clearLogsBodies() {
+    proxyManager.clearLogsBodies()
+  },
+
   getLogEnabled() {
     return proxyManager.getLogEnabled()
   },

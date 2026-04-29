@@ -91,7 +91,7 @@ function flattenBodyMessages(body) {
 
 // --- Forward request to upstream ---
 
-function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter, onResponseBody) {
+function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter, onResponseBody, responseBodyConverter) {
   const parsed = new URL(upstreamUrl)
   const isHttps = parsed.protocol === 'https:'
   const transport = isHttps ? https : http
@@ -113,18 +113,7 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
   const upstreamReq = transport.request(options, (upstreamRes) => {
     const isStreaming = upstreamRes.headers['content-type']?.includes('text/event-stream')
 
-    if (!isStreaming || !sseConverter) {
-      // Non-streaming or no conversion needed — pipe through
-      clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers)
-      if (onResponseBody) {
-        const chunks = []
-        upstreamRes.on('data', c => chunks.push(c))
-        upstreamRes.on('end', () => {
-          try { onResponseBody(Buffer.concat(chunks).toString().slice(0, 1000)) } catch {}
-        })
-      }
-      upstreamRes.pipe(clientRes)
-    } else {
+    if (isStreaming && sseConverter) {
       // SSE streaming with conversion
       clientRes.writeHead(upstreamRes.statusCode, {
         'Content-Type': 'text/event-stream',
@@ -132,13 +121,14 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         'Connection': 'keep-alive'
       })
 
-      // 客户端断连时中断上游请求
       clientRes.on('error', () => {
         upstreamReq.destroy()
       })
 
       let buffer = ''
+      let rawBuffer = ''
       upstreamRes.on('data', (chunk) => {
+        rawBuffer += chunk.toString()
         buffer += chunk.toString()
         const lines = buffer.split(/\r?\n/)
         buffer = lines.pop() || ''
@@ -155,14 +145,92 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
           if (result) clientRes.write(result)
         }
         clientRes.end()
+        if (onResponseBody) onResponseBody(rawBuffer || null)
+      })
+    } else if (isStreaming) {
+      // SSE streaming without conversion — collect and log raw response, then pipe through
+      clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers)
+
+      clientRes.on('error', () => {
+        upstreamReq.destroy()
+      })
+
+      let rawBuffer = ''
+      upstreamRes.on('data', (chunk) => {
+        rawBuffer += chunk.toString()
+      })
+      upstreamRes.on('end', () => {
+        if (onResponseBody) onResponseBody(rawBuffer || null)
+        // Re-emit the buffered data to the client
+        clientRes.write(rawBuffer)
+        clientRes.end()
+      })
+    } else if (sseConverter) {
+      // Client requested streaming but upstream returned non-streaming response.
+      // Treat response body as a single SSE event: parse JSON, produce start/delta/stop sequence.
+      const chunks = []
+      upstreamRes.on('data', c => chunks.push(c))
+      upstreamRes.on('end', () => {
+        const rawBody = Buffer.concat(chunks).toString()
+        clientRes.writeHead(upstreamRes.statusCode, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        })
+
+        try {
+          const data = JSON.parse(rawBody)
+          const choice = data.choices?.[0]
+          const message = choice?.message || {}
+          const role = message.role || 'assistant'
+          const content = message.content || ''
+          const model = data.model || ''
+          const msgId = 'msg_' + Date.now()
+
+          clientRes.write(
+            fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: msgId, type: 'message', role, model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } }) +
+            fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
+            fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: content } }) +
+            fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+            fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: mapFinishReason(choice?.finish_reason || 'stop') }, usage: { output_tokens: data.usage?.completion_tokens || 0 } }) +
+            fmtAnthropicSSE('message_stop', { type: 'message_stop' })
+          )
+          if (onResponseBody) onResponseBody(rawBody)
+        } catch {
+          // Not JSON — pipe raw body as SSE
+          clientRes.write(rawBody)
+        }
+        clientRes.end()
+      })
+    } else {
+      // Non-streaming: collect full body, optionally convert
+      const chunks = []
+      upstreamRes.on('data', c => chunks.push(c))
+      upstreamRes.on('end', () => {
+        let responseBody = Buffer.concat(chunks).toString()
+
+        if (responseBodyConverter) {
+          try {
+            const parsed = JSON.parse(responseBody)
+            responseBody = JSON.stringify(responseBodyConverter(parsed))
+          } catch {
+            // If conversion fails, send raw body as-is
+          }
+        }
+
+        clientRes.writeHead(upstreamRes.statusCode, { 'Content-Type': 'application/json' })
+        clientRes.end(responseBody)
+        if (onResponseBody) onResponseBody(responseBody)
       })
     }
   })
 
   upstreamReq.on('error', (err) => {
     if (!clientRes.headersSent) {
+      const errorBody = JSON.stringify({ error: 'Bad Gateway', message: err.message })
       clientRes.writeHead(502, { 'Content-Type': 'application/json' })
-      clientRes.end(JSON.stringify({ error: 'Bad Gateway', message: err.message }))
+      clientRes.end(errorBody)
+      if (onResponseBody) onResponseBody(errorBody)
     } else {
       clientRes.end()
     }
@@ -323,9 +391,15 @@ function chatToMessagesSSEFactory() {
       if (!started) {
         started = true
         const role = choice.delta?.role || 'assistant'
-        return fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role, model, content: [] } }) +
-               fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
-               fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: choice.delta?.content || '' } })
+        let out = fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role, model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } }) +
+                  fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
+                  fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: choice.delta?.content || '' } })
+        if (choice.finish_reason) {
+          out += fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+                 fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: mapFinishReason(choice.finish_reason) }, usage: { output_tokens: 0 } }) +
+                 fmtAnthropicSSE('message_stop', { type: 'message_stop' })
+        }
+        return out
       }
 
       if (choice.finish_reason) {
@@ -495,7 +569,7 @@ function responsesToMessagesSSEFactory() {
 
       if (data.type === 'response.created') {
         model = data.response?.model || model
-        return fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role: 'assistant', model, content: [] } }) +
+        return fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: messageId, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } }) +
                fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
       }
 
@@ -524,15 +598,167 @@ converters['messages->responses'].sseFactory           = messagesToResponsesSSEF
 converters['responses->chat_completions'].sseFactory   = responsesToChatSSEFactory
 converters['responses->messages'].sseFactory           = responsesToMessagesSSEFactory
 
+// === Response Body Converters (non-streaming) ===
+
+function convertChatResponseToMessages(data) {
+  const choice = data.choices?.[0]
+  const message = choice?.message || {}
+  const reverseFinish = { stop: 'end_turn', length: 'max_tokens', tool_calls: 'tool_use' }
+  return {
+    id: 'msg_' + (data.id || Date.now()),
+    type: 'message',
+    role: message.role || 'assistant',
+    model: data.model || '',
+    content: [{ type: 'text', text: message.content || '' }],
+    stop_reason: reverseFinish[choice?.finish_reason] || choice?.finish_reason || 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: data.usage?.prompt_tokens || 0,
+      output_tokens: data.usage?.completion_tokens || 0
+    }
+  }
+}
+
+function convertMessagesResponseToChat(data) {
+  const textContent = (data.content || [])
+    .filter(c => c.type === 'text')
+    .map(c => c.text || '')
+    .join('')
+  const reverseFinish = { end_turn: 'stop', max_tokens: 'length', tool_use: 'tool_calls' }
+  return {
+    id: data.id || ('msg_' + Date.now()),
+    object: 'chat.completion',
+    created: Math.floor(Date.now()),
+    model: data.model || '',
+    choices: [{
+      index: 0,
+      message: { role: data.role || 'assistant', content: textContent },
+      finish_reason: reverseFinish[data.stop_reason] || data.stop_reason || 'stop'
+    }],
+    usage: {
+      prompt_tokens: data.usage?.input_tokens || 0,
+      completion_tokens: data.usage?.output_tokens || 0,
+      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
+    }
+  }
+}
+
+function convertResponsesResponseToMessages(data) {
+  const textOutput = (data.output || []).flatMap(o => {
+    if (o.type === 'message') {
+      return (o.content || []).filter(c => c.type === 'output_text').map(c => c.text || '')
+    }
+    return []
+  }).join('')
+  return {
+    id: 'msg_' + (data.id || Date.now()),
+    type: 'message',
+    role: 'assistant',
+    model: data.model || '',
+    content: [{ type: 'text', text: textOutput }],
+    stop_reason: data.status === 'completed' ? 'end_turn' : 'max_tokens',
+    stop_sequence: null,
+    usage: {
+      input_tokens: data.usage?.input_tokens || 0,
+      output_tokens: data.usage?.output_tokens || 0
+    }
+  }
+}
+
+function convertMessagesResponseToResponses(data) {
+  const textContent = (data.content || [])
+    .filter(c => c.type === 'text')
+    .map(c => c.text || '')
+    .join('')
+  return {
+    id: data.id || ('msg_' + Date.now()),
+    object: 'response',
+    created_at: Math.floor(Date.now()),
+    status: 'completed',
+    model: data.model || '',
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: textContent }]
+    }],
+    usage: {
+      input_tokens: data.usage?.input_tokens || 0,
+      output_tokens: data.usage?.output_tokens || 0,
+      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
+    }
+  }
+}
+
+function convertChatResponseToResponses(data) {
+  const choice = data.choices?.[0]
+  const message = choice?.message || {}
+  return {
+    id: data.id || ('chatcmpl-' + Date.now()),
+    object: 'response',
+    created_at: Math.floor(Date.now()),
+    status: 'completed',
+    model: data.model || '',
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: message.content || '' }]
+    }],
+    usage: {
+      input_tokens: data.usage?.prompt_tokens || 0,
+      output_tokens: data.usage?.completion_tokens || 0,
+      total_tokens: data.usage?.total_tokens || 0
+    }
+  }
+}
+
+function convertResponsesResponseToChat(data) {
+  const textOutput = (data.output || []).flatMap(o => {
+    if (o.type === 'message') {
+      return (o.content || []).filter(c => c.type === 'output_text').map(c => c.text || '')
+    }
+    return []
+  }).join('')
+  return {
+    id: data.id || ('resp_' + Date.now()),
+    object: 'chat.completion',
+    created: Math.floor(Date.now()),
+    model: data.model || '',
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: textOutput },
+      finish_reason: data.status === 'completed' ? 'stop' : 'length'
+    }],
+    usage: {
+      prompt_tokens: data.usage?.input_tokens || 0,
+      completion_tokens: data.usage?.output_tokens || 0,
+      total_tokens: data.usage?.total_tokens || 0
+    }
+  }
+}
+
+// Register response body converters
+converters['chat_completions->messages'].responseBody   = convertChatResponseToMessages
+converters['chat_completions->responses'].responseBody  = convertChatResponseToResponses
+converters['messages->chat_completions'].responseBody   = convertMessagesResponseToChat
+converters['messages->responses'].responseBody          = convertMessagesResponseToResponses
+converters['responses->chat_completions'].responseBody  = convertResponsesResponseToChat
+converters['responses->messages'].responseBody          = convertResponsesResponseToMessages
+
 function getBodyConverter(source, target) {
   if (source === target) return null
   const key = `${source}->${target}`
   return converters[key] ? converters[key].body : null
 }
 
+function getResponseBodyConverter(source, target) {
+  if (source === target) return null
+  const key = `${target}->${source}`
+  return converters[key] ? converters[key].responseBody : null
+}
+
 function createSSEConverter(source, target) {
   if (source === target) return null
-  const key = `${source}->${target}`
+  const key = `${target}->${source}`
   return converters[key] ? converters[key].sseFactory() : null
 }
 
@@ -547,7 +773,8 @@ async function handleApiRequest(req, res) {
   }
 
   const { profile } = currentConfig
-  const source = PATH_TO_SOURCE[req.url]
+  const urlPath = req.url.split('?')[0]
+  const source = PATH_TO_SOURCE[urlPath]
   const meta = PROVIDER_META[profile.providerType]
 
   if (!source || !meta) {
@@ -586,9 +813,11 @@ async function handleApiRequest(req, res) {
   const sseConverter = req.headers.accept?.includes('text/event-stream') || body.stream
     ? createSSEConverter(source, meta.target)
     : null
+  const responseBodyConverter = getResponseBodyConverter(source, meta.target)
 
   forwardRequest(req, res, upstreamUrl, profile.apiKey, body, sseConverter,
-    req._onResponseBody || null
+    req._onResponseBody || null,
+    responseBodyConverter
   )
 }
 
@@ -606,8 +835,20 @@ function logRequest(endpoint, model, statusCode, duration, error, requestBody, r
   }
   // 仅当开启详细日志时才记录请求/响应体
   if (logEnabled) {
-    data.requestBody = requestBody ? JSON.stringify(requestBody).slice(0, 500) : null
-    data.responseBody = responseBody && typeof responseBody === 'string' ? responseBody.slice(0, 1000) : null
+    data.requestBody = requestBody ? JSON.stringify(requestBody) : null
+    data.responseBody = responseBody || null
+  }
+  // 解析 token 使用量
+  if (responseBody) {
+    try {
+      const parsed = JSON.parse(responseBody)
+      const usage = parsed.usage || parsed.usage_total
+      if (usage) {
+        data.promptTokens = usage.prompt_tokens || usage.input_tokens || 0
+        data.completionTokens = usage.completion_tokens || usage.output_tokens || 0
+        data.totalTokens = usage.total_tokens || (data.promptTokens + data.completionTokens)
+      }
+    } catch {}
   }
   process.send({ type: 'log', data })
 }
@@ -615,17 +856,18 @@ function logRequest(endpoint, model, statusCode, duration, error, requestBody, r
 const server = http.createServer(async (req, res) => {
   const startTime = Date.now()
   const endpoint = req.url
+  const urlPath = endpoint.split('?')[0]
   let model = '-'
   let rawBody = null
   let responseBody = null
 
   try {
-    if (req.url === '/v1/models' && req.method === 'GET') {
+    if (urlPath === '/v1/models' && req.method === 'GET') {
       handleModels(req, res)
       res.on('finish', () => {
         logRequest(endpoint, '-', res.statusCode, Date.now() - startTime, null, null, null)
       })
-    } else if (PATH_TO_SOURCE[req.url]) {
+    } else if (PATH_TO_SOURCE[urlPath]) {
       rawBody = await readBody(req)
       model = (rawBody && rawBody.model) || '-'
       req._body = rawBody
@@ -639,8 +881,10 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (err) {
     if (!res.headersSent) {
+      const errorBody = JSON.stringify({ error: 'Internal Server Error', message: err.message })
       res.writeHead(500, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }))
+      res.end(errorBody)
+      responseBody = errorBody
     }
     model = model || '-'
     logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message, rawBody, responseBody)
