@@ -19,6 +19,10 @@ const showKey = ref(false)
 const saving = ref(false)
 const error = ref('')
 
+const fetchingModels = ref(false)
+const fetchedModels = ref([])
+const showModelDropdown = ref(false)
+
 const title = computed(() => isEdit.value ? '编辑提供商' : '添加提供商')
 
 function loadProfile(id) {
@@ -49,6 +53,39 @@ function save() {
   } finally {
     saving.value = false
   }
+}
+
+function canFetchModels() {
+  return form.value.providerType && form.value.baseUrl.trim() && form.value.apiKey.trim()
+}
+
+async function fetchModels() {
+  if (!canFetchModels()) {
+    error.value = '请先填写提供商类型、Base URL 和 API Key'
+    return
+  }
+  fetchingModels.value = true
+  error.value = ''
+  fetchedModels.value = []
+  showModelDropdown.value = false
+  try {
+    const models = await window.services.fetchProviderModels(form.value)
+    if (models.length === 0) {
+      error.value = '该提供商返回了空的模型列表'
+      return
+    }
+    fetchedModels.value = models
+    showModelDropdown.value = true
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+function selectModel(modelId) {
+  form.value.defaultModel = modelId
+  showModelDropdown.value = false
 }
 
 onMounted(() => {
@@ -103,7 +140,15 @@ onMounted(() => {
 
           <div class="field">
             <label>默认模型 <span class="opt">(可选)</span></label>
-            <input v-model="form.defaultModel" type="text" placeholder="如：gpt-4o" />
+            <div class="model-row">
+              <input v-model="form.defaultModel" type="text" placeholder="如：gpt-4o" />
+              <button type="button" class="btn-fetch" :disabled="fetchingModels || !canFetchModels()" @click="fetchModels">
+                {{ fetchingModels ? '获取中...' : '获取模型' }}
+              </button>
+            </div>
+            <div class="model-dropdown" v-if="showModelDropdown && fetchedModels.length">
+              <div class="model-option" v-for="m in fetchedModels" :key="m" @click="selectModel(m)">{{ m }}</div>
+            </div>
           </div>
 
           <div class="error" v-if="error">{{ error }}</div>
@@ -221,6 +266,46 @@ onMounted(() => {
   transition: all .15s;
 }
 .toggle-key:hover { background: #f1f5f9; }
+
+.model-row {
+  display: flex;
+  gap: 8px;
+}
+.model-row input { flex: 1; }
+
+.btn-fetch {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  font-size: 13px;
+  color: #6366f1;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+}
+.btn-fetch:hover:not(:disabled) { background: #f0f0ff; border-color: #a5b4fc; }
+.btn-fetch:disabled { opacity: .4; cursor: not-allowed; }
+
+.model-dropdown {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  margin-top: 2px;
+}
+
+.model-option {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #334155;
+  cursor: pointer;
+  transition: background .1s;
+}
+.model-option:hover { background: #f0f0ff; }
+.model-option + .model-option { border-top: 1px solid #f1f5f9; }
 
 .error {
   color: #ef4444;
