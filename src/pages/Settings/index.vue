@@ -172,6 +172,13 @@ const pagedLogs = computed(() => {
 const logProviderOptions = computed(() => [...new Set(logs.value.map(l => l.provider).filter(Boolean))])
 const logModelOptions = computed(() => [...new Set(logs.value.map(l => l.model).filter(Boolean))])
 
+const providerTokenMap = computed(() => {
+  if (!stats.value || !stats.value.byProviderTokens) return {}
+  const m = {}
+  for (const t of stats.value.byProviderTokens) m[t.provider] = t.total
+  return m
+})
+
 function resetLogPage() { logPage.value = 1 }
 
 onMounted(()=>{loadSettings();loadStats()})
@@ -389,7 +396,10 @@ onMounted(()=>{loadSettings();loadStats()})
             <div v-for="pv in stats.byProviderModel" :key="pv.provider" class="provider-group">
               <div class="stat-row main">
                 <span class="stat-name">{{ pv.provider }}</span>
-                <span class="stat-val">{{ pv.count }}</span>
+                <div class="stat-vals">
+                  <span class="stat-val token-val" v-if="providerTokenMap[pv.provider]">{{ fmtTok(providerTokenMap[pv.provider]) }}</span>
+                  <span class="stat-val">{{ pv.count }}<span class="unit">次</span></span>
+                </div>
               </div>
               <div class="sub-row" v-for="m in pv.models" :key="m.model">
                 <span class="sub-name">{{ m.model }}</span>
@@ -398,13 +408,6 @@ onMounted(()=>{loadSettings();loadStats()})
             </div>
           </template>
           <div class="card-empty" v-else>暂无数据</div>
-          <div class="provider-tokens" v-if="stats.byProviderTokens && stats.byProviderTokens.length">
-            <h4>Token 使用量</h4>
-            <div class="stat-row" v-for="t in stats.byProviderTokens" :key="t.provider">
-              <span class="stat-name">{{ t.provider }}</span>
-              <span class="stat-val token-val">{{ fmtTok(t.total) }}</span>
-            </div>
-          </div>
         </div>
 
         <div class="card-body" v-if="statsTab === 'model'">
@@ -555,15 +558,13 @@ onMounted(()=>{loadSettings();loadStats()})
 .stat-row + .stat-row { border-top: 1px solid #f1f5f9; }
 .stat-row.main { padding: 10px 0; }
 .stat-name { font-size: 13px; color: #334155; font-weight: 600; }
+.stat-vals { display: flex; align-items: center; gap: 12px; }
 .stat-val { font-size: 14px; font-weight: 700; color: #6366f1; font-family: 'SF Mono',monospace; }
+.token-val { font-size: 12px; color: #f59e0b; }
 .provider-group + .provider-group { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
 .sub-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0 4px 16px; }
 .sub-name { font-size: 12px; color: #64748b; font-family: 'SF Mono',monospace; }
 .sub-val { font-size: 12px; color: #94a3b8; font-family: 'SF Mono',monospace; }
-.provider-tokens { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
-.provider-tokens h4 { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .5px; margin: 0 0 8px; }
-.token-val { font-size: 12px; }
-.token-sub { font-size: 11px; color: #94a3b8; font-family: 'SF Mono',monospace; margin-left: 8px; }
 .unit { font-size: 10px; font-weight: 400; color: #cbd5e1; margin-left: 2px; }
 .model-table-header { display: flex; align-items: center; padding: 0 0 8px; border-bottom: 1px solid #e2e8f0; margin-bottom: 4px; }
 .model-table-header span { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: .3px; }
