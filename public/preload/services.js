@@ -30,9 +30,9 @@ window.services = {
 
   addProfile(profile) {
     const saved = configStore.addProfile(profile)
-    const activeId = configStore.getActiveProfileId()
-    if (!activeId) {
-      configStore.setActiveProfile(saved.id)
+    const activeIds = configStore.getActiveProfiles()
+    if (activeIds.length === 0) {
+      configStore.setActiveProfiles([saved.id])
       proxyManager.reload()
     }
     return saved
@@ -40,8 +40,8 @@ window.services = {
 
   updateProfile(id, updates) {
     const saved = configStore.updateProfile(id, updates)
-    const activeId = configStore.getActiveProfileId()
-    if (activeId === id && proxyManager.getStatus() === 'running') {
+    const activeIds = configStore.getActiveProfiles()
+    if (activeIds.includes(id) && proxyManager.getStatus() === 'running') {
       proxyManager.reload()
     }
     return saved
@@ -51,13 +51,46 @@ window.services = {
     configStore.deleteProfile(id)
   },
 
-  // --- Active profile ---
+  // --- Active profile (legacy single) ---
   getActiveProfile() {
     return configStore.getActiveProfile()
   },
 
   setActiveProfile(id) {
     configStore.setActiveProfile(id)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+  },
+
+  // --- Active profiles (multi-select) ---
+  getActiveProfiles() {
+    return configStore.getActiveProfiles()
+  },
+
+  setActiveProfiles(ids) {
+    configStore.setActiveProfiles(ids)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+  },
+
+  toggleProfile(id, enabled) {
+    const ids = configStore.getActiveProfiles()
+    if (enabled) {
+      if (!ids.includes(id)) {
+        configStore.setActiveProfiles([...ids, id])
+      }
+    } else {
+      configStore.setActiveProfiles(ids.filter(i => i !== id))
+    }
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+  },
+
+  reorderProfiles(orderedIds) {
+    configStore.reorderProfiles(orderedIds)
     if (proxyManager.getStatus() === 'running') {
       proxyManager.reload()
     }

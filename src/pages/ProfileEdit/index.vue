@@ -12,7 +12,8 @@ const form = ref({
   providerType: 'openai-chat',
   baseUrl: '',
   apiKey: '',
-  defaultModel: ''
+  defaultModel: '',
+  models: []
 })
 
 const showKey = ref(false)
@@ -23,6 +24,20 @@ const fetchingModels = ref(false)
 const fetchedModels = ref([])
 const showModelDropdown = ref(false)
 
+// Available models (multi-select)
+const availFetchingModels = ref(false)
+const availFetchedModels = ref([])
+const availShowPicker = ref(false)
+const availPickerSelected = ref({})
+const availSearch = ref('')
+const newAvailModel = ref('')
+
+const filteredAvailModels = computed(() => {
+  const q = availSearch.value.trim().toLowerCase()
+  if (!q) return availFetchedModels.value
+  return availFetchedModels.value.filter(m => m.id.toLowerCase().includes(q))
+})
+
 const title = computed(() => isEdit.value ? '编辑提供商' : '添加提供商')
 
 function loadProfile(id) {
@@ -31,7 +46,7 @@ function loadProfile(id) {
   if (p) {
     editId.value = p.id
     isEdit.value = true
-    form.value = { ...p }
+    form.value = { ...p, models: p.models || [] }
   }
 }
 
@@ -43,11 +58,11 @@ function save() {
   saving.value = true
   try {
     if (isEdit.value) {
-      window.services.updateProfile(editId.value, form.value)
+      window.services.updateProfile(editId.value, { ...form.value, models: [...form.value.models] })
     } else {
-      window.services.addProfile(form.value)
+      window.services.addProfile({ ...form.value, models: [...form.value.models] })
     }
-    navigate('ai')
+    navigate('gateway')
   } catch (e) {
     error.value = e.message
   } finally {
@@ -88,6 +103,74 @@ function selectModel(modelId) {
   showModelDropdown.value = false
 }
 
+// --- Available models multi-select ---
+
+async function fetchAvailModels() {
+  if (!canFetchModels()) {
+    error.value = '请先填写提供商类型、Base URL 和 API Key'
+    return
+  }
+  availFetchingModels.value = true
+  error.value = ''
+  try {
+    const models = await window.services.fetchProviderModels(form.value)
+    if (models.length === 0) {
+      error.value = '该提供商返回了空的模型列表'
+      return
+    }
+    const existing = form.value.models || []
+    availFetchedModels.value = models.map(id => ({ id, exists: existing.includes(id) }))
+    availPickerSelected.value = {}
+    for (const m of availFetchedModels.value) {
+      availPickerSelected.value[m.id] = !m.exists
+    }
+    availShowPicker.value = true
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    availFetchingModels.value = false
+  }
+}
+
+function selectAllAvail() {
+  for (const m of filteredAvailModels.value) {
+    if (!m.exists) availPickerSelected.value[m.id] = true
+  }
+}
+
+function invertAvailSelection() {
+  for (const m of filteredAvailModels.value) {
+    if (!m.exists) availPickerSelected.value[m.id] = !availPickerSelected.value[m.id]
+  }
+}
+
+function confirmAvailModels() {
+  let added = 0
+  const current = new Set(form.value.models || [])
+  for (const m of availFetchedModels.value) {
+    if (availPickerSelected.value[m.id] && !current.has(m.id)) {
+      current.add(m.id)
+      added++
+    }
+  }
+  form.value.models = [...current]
+  availShowPicker.value = false
+}
+
+function removeAvailModel(id) {
+  form.value.models = (form.value.models || []).filter(m => m !== id)
+}
+
+function addAvailModel() {
+  const id = newAvailModel.value.trim()
+  if (!id) return
+  const current = form.value.models || []
+  if (!current.includes(id)) {
+    form.value.models = [...current, id]
+  }
+  newAvailModel.value = ''
+}
+
 onMounted(() => {
   if (pagePayload.value && pagePayload.value.editId) {
     loadProfile(pagePayload.value.editId)
@@ -98,7 +181,7 @@ onMounted(() => {
 <template>
   <div class="editor">
     <div class="page-header">
-      <button class="back-link" @click="navigate('ai')">
+      <button class="back-link" @click="navigate('gateway')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         返回
       </button>
@@ -151,10 +234,26 @@ onMounted(() => {
             </div>
           </div>
 
+          <div class="field">
+            <label>可用模型 <span class="opt">(为空则不参与模型路由)</span></label>
+            <div class="avail-chips" v-if="form.models && form.models.length > 0">
+              <span v-for="m in form.models" :key="m" class="chip">
+                {{ m }}
+                <button class="chip-x" @click="removeAvailModel(m)">&times;</button>
+              </span>
+            </div>
+            <div class="model-row">
+              <input v-model="newAvailModel" type="text" placeholder="输入模型 ID，回车添加" @keyup.enter="addAvailModel" />
+              <button type="button" class="btn-fetch" :disabled="availFetchingModels || !canFetchModels()" @click="fetchAvailModels">
+                {{ availFetchingModels ? '获取中...' : '获取模型' }}
+              </button>
+            </div>
+          </div>
+
           <div class="error" v-if="error">{{ error }}</div>
 
           <div class="actions">
-            <button type="button" class="btn-cancel" @click="navigate('ai')">取消</button>
+            <button type="button" class="btn-cancel" @click="navigate('gateway')">取消</button>
             <button type="button" class="btn-save" :disabled="saving" @click="save">
               {{ saving ? '保存中...' : '保存' }}
             </button>
@@ -162,6 +261,37 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- Available Models Picker Modal -->
+    <Transition name="modal">
+      <div class="modal-overlay" v-if="availShowPicker" @click.self="availShowPicker = false">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3>选择可用模型</h3>
+            <button class="modal-close" @click="availShowPicker = false">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="modal-search">
+              <input v-model="availSearch" type="text" placeholder="搜索模型..." class="search-input" />
+            </div>
+            <div class="modal-actions">
+              <button class="link-btn" @click="selectAllAvail">全选</button>
+              <button class="link-btn" @click="invertAvailSelection">反选</button>
+            </div>
+            <label v-for="m in filteredAvailModels" :key="m.id" class="modal-row" :class="{ disabled: m.exists }">
+              <input type="checkbox" :checked="availPickerSelected[m.id]" :disabled="m.exists" @change="availPickerSelected[m.id] = $event.target.checked" />
+              <span class="modal-model-id">{{ m.id }}</span>
+              <span class="modal-tag" v-if="m.exists">已添加</span>
+            </label>
+            <div class="modal-empty" v-if="filteredAvailModels.length === 0">无匹配结果</div>
+          </div>
+          <div class="modal-footer">
+            <button class="act-btn" @click="availShowPicker = false">取消</button>
+            <button class="btn-save" @click="confirmAvailModels">确定添加</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -346,4 +476,171 @@ onMounted(() => {
 }
 .btn-save:hover { background: #4f46e5; }
 .btn-save:disabled { opacity: .5; cursor: not-allowed; }
+
+.avail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: #f1f5f9;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+
+.chip-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  transition: all .12s;
+}
+.chip-x:hover { background: #fee2e2; color: #ef4444; }
+
+.link-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6366f1;
+  cursor: pointer;
+  transition: color .15s;
+}
+.link-btn:hover { color: #4f46e5; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+.modal-card {
+  width: calc(100% - 48px);
+  max-width: 400px;
+  max-height: 70vh;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.modal-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.modal-close {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 8px;
+  background: transparent; font-size: 20px; color: #94a3b8;
+  cursor: pointer; transition: all .15s;
+}
+.modal-close:hover { background: #f1f5f9; color: #475569; }
+
+.modal-body {
+  padding: 8px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.modal-search { margin-bottom: 8px; }
+.search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  background: #f8fafc;
+  transition: all .15s;
+}
+.search-input:focus {
+  border-color: #a5b4fc;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(165,180,252,.1);
+}
+.modal-actions {
+  display: flex; gap: 12px; margin-bottom: 4px;
+}
+.modal-empty {
+  text-align: center; color: #cbd5e1; font-size: 13px; padding: 24px 0;
+}
+.modal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid #f8fafc;
+}
+.modal-row.disabled { cursor: not-allowed; opacity: .5; }
+.modal-row input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: #6366f1; cursor: pointer; flex-shrink: 0;
+}
+.modal-row.disabled input[type="checkbox"] { cursor: not-allowed; }
+.modal-model-id {
+  font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: #334155; flex: 1;
+  word-break: break-all;
+}
+.modal-tag {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  background: #fef9c3; color: #a16207; font-weight: 600; flex-shrink: 0;
+}
+.modal-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 14px 20px; border-top: 1px solid #f1f5f9;
+}
+.modal-footer .btn-save {
+  padding: 8px 18px;
+  border: none; border-radius: 8px;
+  background: #6366f1; color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .15s;
+}
+.modal-footer .btn-save:hover { background: #4f46e5; }
+.modal-footer .act-btn {
+  padding: 8px 18px;
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  background: #fff; color: #64748b;
+  font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.modal-footer .act-btn:hover { background: #f1f5f9; }
+
+.modal-enter-active,
+.modal-leave-active { transition: all .2s ease; }
+.modal-enter-from,
+.modal-leave-to { opacity: 0; }
+.modal-enter-from .modal-card { transform: scale(.95) translateY(8px); }
 </style>

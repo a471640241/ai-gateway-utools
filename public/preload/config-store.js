@@ -5,6 +5,7 @@ const DB_KEYS = {
   PROXY_SETTINGS: 'config/proxy-settings',
   PROFILES: 'config/profiles',
   ACTIVE_PROFILE: 'config/active-profile',
+  ACTIVE_PROFILES: 'config/active-profiles',
   MODELS: 'config/models'
 }
 
@@ -66,6 +67,11 @@ function deleteProfile(id) {
   if (activeId === id) {
     clearActiveProfile()
   }
+  // 从多选启用列表中也移除
+  const activeIds = getActiveProfiles()
+  if (activeIds.includes(id)) {
+    setActiveProfiles(activeIds.filter(i => i !== id))
+  }
   const profiles = getProfiles().filter(p => p.id !== id)
   saveProfiles(profiles)
 }
@@ -98,6 +104,33 @@ function clearActiveProfile() {
   if (existing) {
     window.utools.db.remove(existing._id, existing._rev)
   }
+}
+
+// --- Active Profiles (multi-select) ---
+
+function getActiveProfiles() {
+  const doc = window.utools.db.get(DB_KEYS.ACTIVE_PROFILES)
+  return doc ? (doc.data.ids || []) : []
+}
+
+function setActiveProfiles(ids) {
+  const existing = window.utools.db.get(DB_KEYS.ACTIVE_PROFILES)
+  const data = { ids }
+  if (existing) {
+    window.utools.db.put({ _id: DB_KEYS.ACTIVE_PROFILES, _rev: existing._rev, data })
+  } else {
+    window.utools.db.put({ _id: DB_KEYS.ACTIVE_PROFILES, data })
+  }
+}
+
+function reorderProfiles(orderedIds) {
+  const profiles = getProfiles()
+  const map = {}
+  for (const p of profiles) map[p.id] = p
+  const reordered = orderedIds.map(id => map[id]).filter(Boolean)
+  // 保留不在 orderedIds 中的 profiles（追加到末尾）
+  const remaining = profiles.filter(p => !orderedIds.includes(p.id))
+  saveProfiles([...reordered, ...remaining])
 }
 
 // --- Models ---
@@ -142,6 +175,9 @@ module.exports = {
   getActiveProfile,
   setActiveProfile,
   clearActiveProfile,
+  getActiveProfiles,
+  setActiveProfiles,
+  reorderProfiles,
   getModels,
   setModels
 }

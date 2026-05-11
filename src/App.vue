@@ -45,13 +45,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <template v-if="route === 'ai'">
+  <template v-if="route === 'gateway'">
     <Home />
   </template>
-  <template v-else-if="route === 'ai-add'">
+  <template v-else-if="route === 'gw-add'">
     <ProfileEdit />
   </template>
-  <template v-else-if="route === 'ai-set'">
+  <template v-else-if="route === 'gw-set'">
     <Settings />
   </template>
   <div v-else class="placeholder">

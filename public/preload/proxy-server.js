@@ -246,8 +246,12 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
 // --- Route: /v1/models ---
 
 function handleModels(_, res) {
-  const models = (currentConfig && currentConfig.models) ? currentConfig.models : []
-  const data = models.map(id => ({ id, object: 'model', owned_by: 'ai-api-switch' }))
+  const globalModels = (currentConfig && currentConfig.models) ? currentConfig.models : []
+  const providerModels = (currentConfig && currentConfig.profiles)
+    ? currentConfig.profiles.flatMap(p => (Array.isArray(p.models) ? p.models : []))
+    : []
+  const allModels = [...new Set([...globalModels, ...providerModels])]
+  const data = allModels.map(id => ({ id, object: 'model', owned_by: 'ai-api-switch' }))
   res.writeHead(200, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({ object: 'list', data }))
 }
@@ -852,19 +856,17 @@ function createSSEConverter(source, target) {
 // --- Handle API request ---
 
 async function handleApiRequest(req, res) {
-  // Check active profile
-  if (!currentConfig || !currentConfig.profile) {
+  // Check active profiles
+  if (!currentConfig || !currentConfig.profiles || currentConfig.profiles.length === 0) {
     res.writeHead(503, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Service Unavailable: no active profile configured' }))
     return
   }
 
-  const { profile } = currentConfig
   const urlPath = req.url.split('?')[0]
   const source = PATH_TO_SOURCE[urlPath]
-  const meta = PROVIDER_META[profile.providerType]
 
-  if (!source || !meta) {
+  if (!source) {
     res.writeHead(404, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Not Found' }))
     return
@@ -884,6 +886,42 @@ async function handleApiRequest(req, res) {
   // Clean malformed body: strip "[undefined]" strings, flatten input_text content arrays
   body = cleanBody(body)
   body = flattenBodyMessages(body)
+
+  // Route by model: find the first profile whose models include body.model
+  const requestedModel = body.model
+  let profile = null
+
+  if (requestedModel) {
+    for (const p of currentConfig.profiles) {
+      if (Array.isArray(p.models) && p.models.length > 0 && p.models.includes(requestedModel)) {
+        profile = p
+        break
+      }
+    }
+  } else {
+    // No model specified — use the first profile with a defaultModel
+    for (const p of currentConfig.profiles) {
+      if (Array.isArray(p.models) && p.models.length > 0) {
+        profile = p
+        break
+      }
+    }
+  }
+
+  if (!profile) {
+    res.writeHead(503, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: `No provider available for model: ${requestedModel || '(none)'}` }))
+    return
+  }
+
+  req._providerName = profile.name
+
+  const meta = PROVIDER_META[profile.providerType]
+  if (!meta) {
+    res.writeHead(500, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: `Unknown providerType: ${profile.providerType}` }))
+    return
+  }
 
   // Fill default model
   if (!body.model && profile.defaultModel) {
@@ -917,12 +955,12 @@ async function handleApiRequest(req, res) {
 
 // --- HTTP Server ---
 
-function logRequest(endpoint, model, statusCode, duration, error, requestBody, responseBody) {
+function logRequest(endpoint, model, statusCode, duration, error, requestBody, responseBody, providerName) {
   const data = {
     timestamp: Date.now(),
     endpoint,
     model: model || '-',
-    provider: (currentConfig && currentConfig.profile) ? currentConfig.profile.name : '-',
+    provider: providerName || '-',
     statusCode,
     duration,
     error: error || null
@@ -963,7 +1001,7 @@ const server = http.createServer(async (req, res) => {
     if (urlPath === '/v1/models' && req.method === 'GET') {
       handleModels(req, res)
       res.on('finish', () => {
-        logRequest(endpoint, '-', res.statusCode, Date.now() - startTime, null, null, null)
+        logRequest(endpoint, '-', res.statusCode, Date.now() - startTime, null, null, null, '-')
       })
     } else if (PATH_TO_SOURCE[urlPath]) {
       rawBody = await readBody(req)
@@ -982,7 +1020,7 @@ const server = http.createServer(async (req, res) => {
 
       res.writeHead(404, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Not Found' }))
-      logRequest(endpoint, '-', 404, Date.now() - startTime, 'route_not_found', bodyForLog, null)
+      logRequest(endpoint, '-', 404, Date.now() - startTime, 'route_not_found', bodyForLog, null, '-')
     }
   } catch (err) {
     if (!res.headersSent) {
@@ -992,12 +1030,12 @@ const server = http.createServer(async (req, res) => {
       responseBody = errorBody
     }
     model = model || '-'
-    logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message, rawBody, responseBody)
+    logRequest(endpoint, model, res.statusCode || 500, Date.now() - startTime, err.message, rawBody, responseBody, req._providerName)
     return
   }
 
   res.on('finish', () => {
-    logRequest(endpoint, model, res.statusCode, Date.now() - startTime, null, rawBody, responseBody)
+    logRequest(endpoint, model, res.statusCode, Date.now() - startTime, null, rawBody, responseBody, req._providerName)
   })
 })
 

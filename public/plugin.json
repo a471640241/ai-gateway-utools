@@ -7,19 +7,19 @@
   },
   "features": [
     {
-      "code": "ai",
-      "explain": "AI API 代理主页：切换服务配置、启停代理",
-      "cmds": ["ai"]
+      "code": "gateway",
+      "explain": "AI 网关：管理提供商、模型路由、启停代理",
+      "cmds": ["gateway", "gw", "AI网关", "网关"]
     },
     {
-      "code": "ai-add",
-      "explain": "添加或编辑 AI 服务配置",
-      "cmds": ["ai add", "ai 添加"]
+      "code": "gw-add",
+      "explain": "添加或编辑 AI 提供商配置",
+      "cmds": ["gw add", "添加提供商"]
     },
     {
-      "code": "ai-set",
-      "explain": "代理设置：端口、自动启动、全局模型列表管理",
-      "cmds": ["ai set", "ai 设置"]
+      "code": "gw-set",
+      "explain": "网关设置：端口、自动启动、统计与日志",
+      "cmds": ["gw set", "网关设置"]
     }
   ]
 }

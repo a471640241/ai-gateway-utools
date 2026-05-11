@@ -191,6 +191,12 @@ function getStats() {
 
 function setCrashCallback(fn) { crashCallback = fn }
 
+function getActiveProfilesList() {
+  const activeIds = configStore.getActiveProfiles()
+  const allProfiles = configStore.getProfiles()
+  return activeIds.map(id => allProfiles.find(p => p.id === id)).filter(Boolean)
+}
+
 function getStatus() {
   return status
 }
@@ -207,7 +213,7 @@ function start() {
       return
     }
 
-    const profile = configStore.getActiveProfile()
+    const profiles = getActiveProfilesList()
     const settings = configStore.getProxySettings()
     const models = configStore.getModels()
 
@@ -243,7 +249,7 @@ function start() {
     })
 
     // Send init config
-    child.send({ type: 'init', config: { profile, settings, models } })
+    child.send({ type: 'init', config: { profiles, settings, models } })
   })
 }
 
@@ -272,10 +278,10 @@ function stop() {
 
 function reload() {
   if (!child || status !== 'running') return
-  const profile = configStore.getActiveProfile()
+  const profiles = getActiveProfilesList()
   const settings = configStore.getProxySettings()
   const models = configStore.getModels()
-  child.send({ type: 'reload', config: { profile, settings, models } })
+  child.send({ type: 'reload', config: { profiles, settings, models } })
 }
 
 function restart() {
@@ -292,7 +298,7 @@ function setLogEnabled(enabled) {
   configStore.setProxySettings(settings)
   if (child && status === 'running') {
     child.send({ type: 'reload', config: {
-      profile: configStore.getActiveProfile(),
+      profiles: getActiveProfilesList(),
       settings,
       models: configStore.getModels()
     }})
