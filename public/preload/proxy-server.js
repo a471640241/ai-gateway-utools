@@ -148,8 +148,12 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         if (onResponseBody) onResponseBody(rawBuffer || null)
       })
     } else if (isStreaming) {
-      // SSE streaming without conversion — collect and log raw response, then pipe through
-      clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers)
+      // SSE streaming without conversion — pipe through immediately
+      clientRes.writeHead(upstreamRes.statusCode, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+      })
 
       clientRes.on('error', () => {
         upstreamReq.destroy()
@@ -158,11 +162,10 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
       let rawBuffer = ''
       upstreamRes.on('data', (chunk) => {
         rawBuffer += chunk.toString()
+        clientRes.write(chunk)
       })
       upstreamRes.on('end', () => {
         if (onResponseBody) onResponseBody(rawBuffer || null)
-        // Re-emit the buffered data to the client
-        clientRes.write(rawBuffer)
         clientRes.end()
       })
     } else if (sseConverter) {
@@ -598,6 +601,90 @@ converters['messages->responses'].sseFactory           = messagesToResponsesSSEF
 converters['responses->chat_completions'].sseFactory   = responsesToChatSSEFactory
 converters['responses->messages'].sseFactory           = responsesToMessagesSSEFactory
 
+// === Combined reasoning converter ===
+// Handles two formats:
+// 1. reasoning_details field (MiniMax with reasoning_split=true) — cumulative text
+// 2. <think〉 tags in content (MiniMax without reasoning_split) — strip tags
+// Both are converted to reasoning_content for client compatibility (e.g. CherryStudio).
+
+function reasoningSSEFactory() {
+  let inThinking = false
+  let lastReasoning = ''
+  var TO = '\x3Cthink\x3E'
+  var TC = '\x3C/think\x3E'
+
+  return (line) => {
+    if (!line.startsWith('data: ')) return ''
+    if (line.startsWith('data: [DONE]')) return 'data: [DONE]\n\n'
+
+    try {
+      var data = JSON.parse(line.slice(6))
+      var choice = data.choices && data.choices[0]
+      if (!choice) return 'data: ' + JSON.stringify(data) + '\n\n'
+
+      // Case 1: reasoning_details (MiniMax reasoning_split=true)
+      var details = choice.delta && choice.delta.reasoning_details
+      if (details && details.length > 0) {
+        var cur = details.map(function(d) { return d.text || '' }).join('')
+        var inc = cur.substring(lastReasoning.length)
+        lastReasoning = cur
+        if (inc) choice.delta.reasoning_content = inc
+        delete choice.delta.reasoning_details
+        return 'data: ' + JSON.stringify(data) + '\n\n'
+      }
+
+      // No content to process, pass through (preserves finish_reason, usage, etc.)
+      if (!choice.delta || choice.delta.content == null) {
+        return 'data: ' + JSON.stringify(data) + '\n\n'
+      }
+
+      // Case 2: <think〉 tags in content
+      var content = choice.delta.content
+      var result = ''
+
+      while (content) {
+        if (!inThinking) {
+          var oi = content.indexOf(TO)
+          if (oi !== -1) {
+            if (oi > 0) {
+              choice.delta.content = content.substring(0, oi)
+              delete choice.delta.reasoning_content
+              result += 'data: ' + JSON.stringify(data) + '\n\n'
+            }
+            inThinking = true
+            content = content.substring(oi + TO.length)
+          } else {
+            choice.delta.content = content
+            delete choice.delta.reasoning_content
+            result += 'data: ' + JSON.stringify(data) + '\n\n'
+            break
+          }
+        } else {
+          var ci = content.indexOf(TC)
+          if (ci !== -1) {
+            if (ci > 0) {
+              delete choice.delta.content
+              choice.delta.reasoning_content = content.substring(0, ci)
+              result += 'data: ' + JSON.stringify(data) + '\n\n'
+            }
+            inThinking = false
+            content = content.substring(ci + TC.length)
+          } else {
+            delete choice.delta.content
+            choice.delta.reasoning_content = content
+            result += 'data: ' + JSON.stringify(data) + '\n\n'
+            break
+          }
+        }
+      }
+
+      return result
+    } catch (e) {
+      return ''
+    }
+  }
+}
+
 // === Response Body Converters (non-streaming) ===
 
 function convertChatResponseToMessages(data) {
@@ -810,9 +897,16 @@ async function handleApiRequest(req, res) {
   }
 
   const upstreamUrl = `${profile.baseUrl}${meta.path}`
-  const sseConverter = req.headers.accept?.includes('text/event-stream') || body.stream
-    ? createSSEConverter(source, meta.target)
-    : null
+  const needStream = req.headers.accept?.includes('text/event-stream') || body.stream
+  let sseConverter = needStream ? createSSEConverter(source, meta.target) : null
+  // Same-format chat_completions: inject reasoning_split for MiniMax-style providers
+  // and convert reasoning output to reasoning_content for client compatibility
+  if (!sseConverter && source === 'chat_completions' && meta.target === 'chat_completions') {
+    body.reasoning_split = true
+    if (needStream) {
+      sseConverter = reasoningSSEFactory()
+    }
+  }
   const responseBodyConverter = getResponseBodyConverter(source, meta.target)
 
   forwardRequest(req, res, upstreamUrl, profile.apiKey, body, sseConverter,
