@@ -38,14 +38,30 @@ function loadData() {
 }
 
 const aggregatedModels = computed(() => {
-  const all = new Set()
+  const modelProviders = {}
   for (const id of activeProfileIds.value) {
     const p = profiles.value.find(pr => pr.id === id)
     if (p && Array.isArray(p.models)) {
-      for (const m of p.models) all.add(m)
+      for (const m of p.models) {
+        if (!modelProviders[m]) modelProviders[m] = []
+        modelProviders[m].push(p.name)
+      }
     }
   }
-  return [...all].sort()
+  const result = []
+  const seen = new Set()
+  for (const id of activeProfileIds.value) {
+    const p = profiles.value.find(pr => pr.id === id)
+    if (p && Array.isArray(p.models)) {
+      for (const m of p.models) {
+        if (!seen.has(m)) {
+          seen.add(m)
+          result.push({ model: m, providers: modelProviders[m] })
+        }
+      }
+    }
+  }
+  return result
 })
 
 async function toggleProxy() {
@@ -254,10 +270,13 @@ onMounted(loadData)
         </h3>
       </div>
       <div class="card-body">
-        <div class="model-chips" v-if="aggregatedModels.length > 0">
-          <span v-for="m in aggregatedModels" :key="m" class="chip">
-            {{ m }}
-          </span>
+        <div class="model-list" v-if="aggregatedModels.length > 0">
+          <div v-for="item in aggregatedModels" :key="item.model" class="model-row">
+            <span class="model-id">{{ item.model }}</span>
+            <div class="model-providers">
+              <span v-for="pv in item.providers" :key="pv" class="provider-tag">{{ pv }}</span>
+            </div>
+          </div>
         </div>
         <div class="card-empty" v-else style="padding: 16px 0;">启用提供商并配置可用模型后，此处自动聚合展示</div>
       </div>
@@ -585,22 +604,51 @@ onMounted(loadData)
 .act-btn.danger:hover { background: #fef2f2; }
 
 /* ===== Model Section ===== */
-.model-chips {
+.model-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
 }
 
-.chip {
-  display: inline-flex;
+.model-row {
+  display: flex;
   align-items: center;
-  padding: 5px 10px;
-  background: #f1f5f9;
+  gap: 10px;
+  padding: 6px 10px;
   border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  transition: background .12s;
+}
+.model-row:hover { background: #f1f5f9; }
+
+.model-id {
   font-size: 12.5px;
   font-family: 'SF Mono', 'Fira Code', monospace;
   color: #334155;
-  border: 1px solid #e2e8f0;
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-providers {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.provider-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #6366f1;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* ===== Tip Icon ===== */
