@@ -6,7 +6,8 @@ const DB_KEYS = {
   PROFILES: 'config/profiles',
   ACTIVE_PROFILE: 'config/active-profile',
   ACTIVE_PROFILES: 'config/active-profiles',
-  MODELS: 'config/models'
+  MODELS: 'config/models',
+  MODEL_MAPPINGS: 'config/model-mappings'
 }
 
 // --- Proxy Settings ---
@@ -152,6 +153,23 @@ function setModels(models) {
   return models
 }
 
+// --- Model Mappings ---
+
+function getModelMappings() {
+  const doc = window.utools.db.get(DB_KEYS.MODEL_MAPPINGS)
+  return doc ? doc.data : { enabled: false, rules: [] }
+}
+
+function setModelMappings(mappings) {
+  const existing = window.utools.db.get(DB_KEYS.MODEL_MAPPINGS)
+  if (existing) {
+    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, _rev: existing._rev, data: mappings })
+  } else {
+    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, data: mappings })
+  }
+  return mappings
+}
+
 // --- Helpers ---
 
 function generateId() {
@@ -179,5 +197,7 @@ module.exports = {
   setActiveProfiles,
   reorderProfiles,
   getModels,
-  setModels
+  setModels,
+  getModelMappings,
+  setModelMappings
 }

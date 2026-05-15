@@ -132,6 +132,19 @@ window.services = {
     return models
   },
 
+  // --- Model Mappings ---
+  getModelMappings() {
+    return configStore.getModelMappings()
+  },
+
+  setModelMappings(mappings) {
+    const saved = configStore.setModelMappings(mappings)
+    if (proxyManager.getStatus() === 'running') {
+      proxyManager.reload()
+    }
+    return saved
+  },
+
   // 从上游提供商获取模型列表
   fetchProviderModels(profile) {
     return new Promise((resolve, reject) => {

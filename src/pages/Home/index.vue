@@ -8,6 +8,7 @@ const proxyPort = ref(9999)
 const profiles = ref([])
 const activeProfileIds = ref([])
 const toast = ref('')
+const modelMappings = ref({ enabled: false, rules: [] })
 
 const proxyUrl = computed(() => `http://127.0.0.1:${proxyPort.value}`)
 
@@ -35,6 +36,7 @@ function loadData() {
   const status = window.services.getProxyStatus()
   proxyStatus.value = status.status
   proxyPort.value = status.port
+  modelMappings.value = window.services.getModelMappings()
 }
 
 const aggregatedModels = computed(() => {
@@ -90,6 +92,11 @@ function copyUrl() {
   el.select(); document.execCommand('copy')
   document.body.removeChild(el)
   showToast('已复制代理地址')
+}
+
+function copyModelId(id) {
+  window.services.copyText(id)
+  showToast('已复制: ' + id)
 }
 
 function copyProfile(p) {
@@ -176,6 +183,34 @@ function showToast(msg) {
   toast.value = msg
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { toast.value = '' }, 3500)
+}
+
+// --- Model Mappings ---
+function toggleModelMappings() {
+  modelMappings.value = { ...modelMappings.value, enabled: !modelMappings.value.enabled }
+  window.services.setModelMappings(modelMappings.value)
+}
+
+function addMappingRule() {
+  modelMappings.value = {
+    ...modelMappings.value,
+    rules: [...modelMappings.value.rules, { from: '', to: '' }]
+  }
+  window.services.setModelMappings(modelMappings.value)
+}
+
+function removeMappingRule(index) {
+  const rules = [...modelMappings.value.rules]
+  rules.splice(index, 1)
+  modelMappings.value = { ...modelMappings.value, rules }
+  window.services.setModelMappings(modelMappings.value)
+}
+
+function updateMappingRule(index, field, value) {
+  const rules = [...modelMappings.value.rules]
+  rules[index] = { ...rules[index], [field]: value }
+  modelMappings.value = { ...modelMappings.value, rules }
+  window.services.setModelMappings(modelMappings.value)
 }
 
 onMounted(loadData)
@@ -276,9 +311,64 @@ onMounted(loadData)
             <div class="model-providers">
               <span v-for="pv in item.providers" :key="pv" class="provider-tag">{{ pv }}</span>
             </div>
+            <button class="model-copy-btn" @click.stop="copyModelId(item.model)" title="复制模型 ID">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
           </div>
         </div>
         <div class="card-empty" v-else style="padding: 16px 0;">启用提供商并配置可用模型后，此处自动聚合展示</div>
+      </div>
+    </div>
+
+    <!-- 模型映射 -->
+    <div class="card">
+      <div class="card-header">
+        <h3>模型映射
+          <span class="tip-icon">
+            ?
+            <span class="tip-pop">将客户端请求的模型 ID 映射为真实模型 ID。适用于客户端固定模型名称（如 Codex 只能调用 gpt5.5）但你没有该模型的场景</span>
+          </span>
+        </h3>
+        <button class="toggle-btn" :class="{ on: modelMappings.enabled }" @click="toggleModelMappings">
+          {{ modelMappings.enabled ? '已启用' : '已禁用' }}
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="mapping-rules" v-if="modelMappings.rules.length > 0">
+          <div class="mapping-header">
+            <span class="mapping-col-from">请求模型</span>
+            <span class="mapping-arrow"></span>
+            <span class="mapping-col-to">实际模型</span>
+            <span class="mapping-col-action"></span>
+          </div>
+          <div v-for="(rule, index) in modelMappings.rules" :key="index" class="mapping-row">
+            <input
+              class="mapping-input"
+              :value="rule.from"
+              @input="updateMappingRule(index, 'from', $event.target.value)"
+              placeholder="如 gpt5.5"
+              :disabled="!modelMappings.enabled"
+            />
+            <span class="mapping-arrow">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </span>
+            <select
+              class="mapping-select"
+              :value="rule.to"
+              @change="updateMappingRule(index, 'to', $event.target.value)"
+              :disabled="!modelMappings.enabled"
+            >
+              <option value="" disabled>选择实际模型</option>
+              <option v-for="item in aggregatedModels" :key="item.model" :value="item.model">{{ item.model }}</option>
+            </select>
+            <button class="mapping-remove" @click="removeMappingRule(index)" :disabled="!modelMappings.enabled">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="card-empty" v-else-if="!modelMappings.enabled" style="padding: 16px 0;">启用后可添加模型映射规则</div>
+        <div class="card-empty" v-else style="padding: 16px 0;">暂无映射规则，点击下方添加</div>
+        <button class="add-rule-btn" v-if="modelMappings.enabled" @click="addMappingRule">+ 添加映射</button>
       </div>
     </div>
   </div>
@@ -622,6 +712,25 @@ onMounted(loadData)
 }
 .model-row:hover { background: #f1f5f9; }
 
+.model-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all .12s;
+}
+.model-copy-btn:hover {
+  background: #e2e8f0;
+  color: #6366f1;
+}
+
 .model-id {
   font-size: 12.5px;
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -708,4 +817,147 @@ onMounted(loadData)
   color: #fbbf24;
 }
 .tip-icon:hover .tip-pop { display: block; }
+
+/* ===== Toggle Button ===== */
+.toggle-btn {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+.toggle-btn.on {
+  background: #eef2ff;
+  color: #6366f1;
+}
+.toggle-btn:hover { opacity: .85; }
+
+/* ===== Mapping Rules ===== */
+.mapping-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mapping-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.mapping-header span {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+
+.mapping-col-from { flex: 1; }
+.mapping-col-to { flex: 1; }
+.mapping-col-action { width: 28px; flex-shrink: 0; }
+
+.mapping-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mapping-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #334155;
+  background: #fff;
+  outline: none;
+  transition: border-color .15s;
+}
+.mapping-input:focus {
+  border-color: #6366f1;
+}
+.mapping-input:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.mapping-select {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: #334155;
+  background: #fff;
+  outline: none;
+  transition: border-color .15s;
+  cursor: pointer;
+}
+.mapping-select:focus {
+  border-color: #6366f1;
+}
+.mapping-select:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.mapping-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  flex-shrink: 0;
+  color: #cbd5e1;
+}
+
+.mapping-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all .12s;
+  flex-shrink: 0;
+}
+.mapping-remove:hover:not(:disabled) {
+  background: #fef2f2;
+  color: #ef4444;
+}
+.mapping-remove:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.add-rule-btn {
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  border: 1px dashed #e2e8f0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #6366f1;
+  cursor: pointer;
+  transition: all .12s;
+}
+.add-rule-btn:hover {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
 </style>

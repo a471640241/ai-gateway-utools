@@ -216,6 +216,7 @@ function start() {
     const profiles = getActiveProfilesList()
     const settings = configStore.getProxySettings()
     const models = configStore.getModels()
+    const modelMappings = configStore.getModelMappings()
 
     const proxyPath = path.join(__dirname, 'proxy-server.js')
 
@@ -249,7 +250,7 @@ function start() {
     })
 
     // Send init config
-    child.send({ type: 'init', config: { profiles, settings, models } })
+    child.send({ type: 'init', config: { profiles, settings, models, modelMappings } })
   })
 }
 
@@ -281,7 +282,8 @@ function reload() {
   const profiles = getActiveProfilesList()
   const settings = configStore.getProxySettings()
   const models = configStore.getModels()
-  child.send({ type: 'reload', config: { profiles, settings, models } })
+  const modelMappings = configStore.getModelMappings()
+  child.send({ type: 'reload', config: { profiles, settings, models, modelMappings } })
 }
 
 function restart() {
@@ -300,7 +302,8 @@ function setLogEnabled(enabled) {
     child.send({ type: 'reload', config: {
       profiles: getActiveProfilesList(),
       settings,
-      models: configStore.getModels()
+      models: configStore.getModels(),
+      modelMappings: configStore.getModelMappings()
     }})
   }
 }

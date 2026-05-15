@@ -927,6 +927,16 @@ async function handleApiRequest(req, res) {
   body = cleanBody(body)
   body = flattenBodyMessages(body)
 
+  // Apply model mapping if enabled
+  if (currentConfig.modelMappings && currentConfig.modelMappings.enabled && body.model) {
+    for (const rule of currentConfig.modelMappings.rules) {
+      if (body.model === rule.from) {
+        body.model = rule.to
+        break
+      }
+    }
+  }
+
   // Route by model: find the first profile whose models include body.model
   const requestedModel = body.model
   let profile = null
