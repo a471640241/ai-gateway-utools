@@ -121,13 +121,28 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         'Connection': 'keep-alive'
       })
 
-      clientRes.on('error', () => {
+      let closed = false
+      const keepAlive = setInterval(() => {
+        if (!closed && !clientRes.writableEnded) clientRes.write(': keepalive\n\n')
+      }, 15000)
+
+      const cleanup = () => {
+        if (closed) return
+        closed = true
+        clearInterval(keepAlive)
         upstreamReq.destroy()
-      })
+        if (!clientRes.writableEnded) clientRes.end()
+      }
+
+      clientRes.on('error', cleanup)
+      clientRes.on('close', cleanup)
+
+      upstreamRes.on('error', cleanup)
 
       let buffer = ''
       let rawBuffer = ''
       upstreamRes.on('data', (chunk) => {
+        if (closed) return
         rawBuffer += chunk.toString()
         buffer += chunk.toString()
         const lines = buffer.split(/\r?\n/)
@@ -140,6 +155,9 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
       })
 
       upstreamRes.on('end', () => {
+        if (closed) return
+        closed = true
+        clearInterval(keepAlive)
         if (buffer.trim()) {
           const result = sseConverter(buffer)
           if (result) clientRes.write(result)
@@ -155,16 +173,34 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         'Connection': 'keep-alive'
       })
 
-      clientRes.on('error', () => {
+      let closed = false
+      const keepAlive = setInterval(() => {
+        if (!closed && !clientRes.writableEnded) clientRes.write(': keepalive\n\n')
+      }, 15000)
+
+      const cleanup = () => {
+        if (closed) return
+        closed = true
+        clearInterval(keepAlive)
         upstreamReq.destroy()
-      })
+        if (!clientRes.writableEnded) clientRes.end()
+      }
+
+      clientRes.on('error', cleanup)
+      clientRes.on('close', cleanup)
+
+      upstreamRes.on('error', cleanup)
 
       let rawBuffer = ''
       upstreamRes.on('data', (chunk) => {
+        if (closed) return
         rawBuffer += chunk.toString()
         clientRes.write(chunk)
       })
       upstreamRes.on('end', () => {
+        if (closed) return
+        closed = true
+        clearInterval(keepAlive)
         if (onResponseBody) onResponseBody(rawBuffer || null)
         clientRes.end()
       })
@@ -226,6 +262,10 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
         if (onResponseBody) onResponseBody(responseBody)
       })
     }
+  })
+
+  upstreamReq.setTimeout(300000, () => {
+    upstreamReq.destroy(new Error('upstream request timeout'))
   })
 
   upstreamReq.on('error', (err) => {
@@ -990,6 +1030,9 @@ function logRequest(endpoint, model, statusCode, duration, error, requestBody, r
 }
 
 const server = http.createServer(async (req, res) => {
+  // 防止长连接（SSE）被默认超时断开
+  req.setTimeout(0)
+  res.setTimeout(0)
   const startTime = Date.now()
   const endpoint = req.url
   const urlPath = endpoint.split('?')[0]
@@ -1054,6 +1097,10 @@ process.on('message', (msg) => {
     logEnabled = !!(msg.config.settings && msg.config.settings.logEnabled)
   }
 })
+
+// 防止 SSE 长连接被默认超时断开
+server.keepAliveTimeout = 0
+server.headersTimeout = 0
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {

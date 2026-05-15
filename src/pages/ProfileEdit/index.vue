@@ -17,6 +17,7 @@ const form = ref({
 })
 
 const showKey = ref(false)
+const copied = ref(false)
 const saving = ref(false)
 const error = ref('')
 
@@ -68,6 +69,13 @@ function save() {
   } finally {
     saving.value = false
   }
+}
+
+function copyKey() {
+  if (!form.value.apiKey) return
+  navigator.clipboard.writeText(form.value.apiKey)
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 1500)
 }
 
 function canFetchModels() {
@@ -217,6 +225,9 @@ onMounted(() => {
               <input v-model="form.apiKey" :type="showKey ? 'text' : 'password'" placeholder="sk-..." />
               <button type="button" class="toggle-key" @click="showKey = !showKey">
                 {{ showKey ? '隐藏' : '显示' }}
+              </button>
+              <button type="button" class="toggle-key" @click="copyKey" :disabled="!form.apiKey">
+                {{ copied ? '已复制' : '复制' }}
               </button>
             </div>
           </div>
@@ -396,6 +407,7 @@ onMounted(() => {
   transition: all .15s;
 }
 .toggle-key:hover { background: #f1f5f9; }
+.toggle-key:disabled { opacity: .4; cursor: not-allowed; }
 
 .model-row {
   display: flex;
