@@ -938,20 +938,24 @@ async function handleApiRequest(req, res) {
         break
       }
     }
+    if (!profile) {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: `AI 网关未匹配到模型: ${requestedModel}` }))
+      return
+    }
   } else {
-    // No model specified — use the first profile with a defaultModel
+    // No model specified — use the first profile with models
     for (const p of currentConfig.profiles) {
       if (Array.isArray(p.models) && p.models.length > 0) {
         profile = p
         break
       }
     }
-  }
-
-  if (!profile) {
-    res.writeHead(503, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: `No provider available for model: ${requestedModel || '(none)'}` }))
-    return
+    if (!profile) {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'AI 网关无可用提供商配置' }))
+      return
+    }
   }
 
   req._providerName = profile.name
