@@ -16,7 +16,10 @@ let logEnabled = false
 const PATH_TO_SOURCE = {
   '/v1/chat/completions': 'chat_completions',
   '/v1/responses': 'responses',
-  '/v1/messages': 'messages'
+  '/v1/messages': 'messages',
+  '/chat/completions': 'chat_completions',
+  '/responses': 'responses',
+  '/messages': 'messages'
 }
 
 // --- Provider type → target format + upstream path ---
@@ -83,7 +86,7 @@ function flattenMessageContent(msg) {
 
 function flattenBodyMessages(body) {
   const msgArray = body.input || body.messages
-  if (!msgArray) return body
+  if (!msgArray || !Array.isArray(msgArray)) return body
   const flattened = msgArray.map(flattenMessageContent)
   if (body.input) return { ...body, input: flattened }
   return { ...body, messages: flattened }
@@ -91,7 +94,7 @@ function flattenBodyMessages(body) {
 
 // --- Forward request to upstream ---
 
-function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter, onResponseBody, responseBodyConverter) {
+function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConverter, onResponseBody, responseBodyConverter, sourceFormat) {
   const parsed = new URL(upstreamUrl)
   const isHttps = parsed.protocol === 'https:'
   const transport = isHttps ? https : http
@@ -206,7 +209,7 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
       })
     } else if (sseConverter) {
       // Client requested streaming but upstream returned non-streaming response.
-      // Treat response body as a single SSE event: parse JSON, produce start/delta/stop sequence.
+      // Treat response body as a single SSE event: parse JSON, produce full SSE sequence.
       const chunks = []
       upstreamRes.on('data', c => chunks.push(c))
       upstreamRes.on('end', () => {
@@ -219,24 +222,66 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
 
         try {
           const data = JSON.parse(rawBody)
-          const choice = data.choices?.[0]
-          const message = choice?.message || {}
-          const role = message.role || 'assistant'
-          const content = message.content || ''
-          const model = data.model || ''
-          const msgId = 'msg_' + Date.now()
 
-          clientRes.write(
-            fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: msgId, type: 'message', role, model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } }) +
-            fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
-            fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: content } }) +
-            fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
-            fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: mapFinishReason(choice?.finish_reason || 'stop') }, usage: { output_tokens: data.usage?.completion_tokens || 0 } }) +
-            fmtAnthropicSSE('message_stop', { type: 'message_stop' })
-          )
+          if (sourceFormat === 'responses') {
+            // Upstream returned non-streaming Chat/Messages JSON, client expects Responses SSE
+            const choice = data.choices?.[0]
+            const content = choice?.message?.content || (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || ''
+            const model = data.model || ''
+            const inputTokens = data.usage?.prompt_tokens || data.usage?.input_tokens || 0
+            const outputTokens = data.usage?.completion_tokens || data.usage?.output_tokens || 0
+            const responseId = 'resp_' + Date.now()
+            const itemId = 'msg_' + Date.now()
+
+            function makeResp(overrides) {
+              return Object.assign({ id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'in_progress', error: null, incomplete_details: null, instructions: null, max_output_tokens: null, model, output: [], parallel_tool_calls: true, previous_response_id: null, reasoning: { effort: null, summary: null }, store: true, temperature: 1.0, text: { format: { type: 'text' } }, tool_choice: 'auto', tools: [], top_p: 1.0, truncation: 'disabled', usage: null, user: null, metadata: {} }, overrides)
+            }
+
+            clientRes.write(
+              fmtResponsesSSE('response.created', { type: 'response.created', response: makeResp({ status: 'in_progress' }) }) +
+              fmtResponsesSSE('response.in_progress', { type: 'response.in_progress', response: makeResp({ status: 'in_progress' }) }) +
+              fmtResponsesSSE('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] } }) +
+              fmtResponsesSSE('response.content_part.added', { type: 'response.content_part.added', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } }) +
+              (content ? fmtResponsesSSE('response.output_text.delta', { type: 'response.output_text.delta', item_id: itemId, output_index: 0, content_index: 0, delta: content }) : '') +
+              fmtResponsesSSE('response.output_text.done', { type: 'response.output_text.done', item_id: itemId, output_index: 0, content_index: 0, text: content }) +
+              fmtResponsesSSE('response.content_part.done', { type: 'response.content_part.done', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: content, annotations: [] } }) +
+              fmtResponsesSSE('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: content, annotations: [] }] } }) +
+              fmtResponsesSSE('response.completed', { type: 'response.completed', response: makeResp({ status: 'completed', output: [{ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: content, annotations: [] }] }], usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } }) })
+            )
+          } else if (sourceFormat === 'chat_completions') {
+            // Client expects Chat Completions SSE
+            const choice = data.choices?.[0]
+            const message = choice?.message || {}
+            const content = message.content || (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || ''
+            const model = data.model || ''
+            const chatId = 'chatcmpl-' + Date.now()
+
+            clientRes.write(
+              fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] }) +
+              (content ? fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: { content: content }, finish_reason: null }] }) : '') +
+              fmtOpenAISSE({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()), model, choices: [{ index: 0, delta: {}, finish_reason: choice?.finish_reason || 'stop' }] }) +
+              'data: [DONE]\n\n'
+            )
+          } else {
+            // Client expects Anthropic Messages SSE
+            const choice = data.choices?.[0]
+            const message = choice?.message || {}
+            const role = message.role || 'assistant'
+            const content = message.content || (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || ''
+            const model = data.model || ''
+            const msgId = 'msg_' + Date.now()
+
+            clientRes.write(
+              fmtAnthropicSSE('message_start', { type: 'message_start', message: { id: msgId, type: 'message', role, model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } }) +
+              fmtAnthropicSSE('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) +
+              fmtAnthropicSSE('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: content } }) +
+              fmtAnthropicSSE('content_block_stop', { type: 'content_block_stop', index: 0 }) +
+              fmtAnthropicSSE('message_delta', { type: 'message_delta', delta: { stop_reason: mapFinishReason(choice?.finish_reason || 'stop') }, usage: { output_tokens: data.usage?.completion_tokens || 0 } }) +
+              fmtAnthropicSSE('message_stop', { type: 'message_stop' })
+            )
+          }
           if (onResponseBody) onResponseBody(rawBody)
         } catch {
-          // Not JSON — pipe raw body as SSE
           clientRes.write(rawBody)
         }
         clientRes.end()
@@ -305,9 +350,9 @@ const converters = {}
 // 专有字段被透传到不认识它们的上游 API。
 
 const TARGET_FIELDS = {
-  chat_completions: ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'frequency_penalty', 'presence_penalty', 'stop', 'n', 'logprobs', 'top_logprobs', 'user', 'messages'],
-  responses:        ['model', 'stream', 'temperature', 'top_p', 'max_output_tokens', 'store', 'instructions', 'input'],
-  messages:         ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'stop_sequences', 'top_k', 'system', 'messages']
+  chat_completions: ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'frequency_penalty', 'presence_penalty', 'stop', 'n', 'logprobs', 'top_logprobs', 'user', 'messages', 'tools', 'tool_choice', 'parallel_tool_calls'],
+  responses:        ['model', 'stream', 'temperature', 'top_p', 'max_output_tokens', 'store', 'instructions', 'input', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'text', 'previous_response_id', 'metadata', 'user'],
+  messages:         ['model', 'stream', 'temperature', 'top_p', 'max_tokens', 'stop_sequences', 'top_k', 'system', 'messages', 'tools', 'tool_choice']
 }
 
 function pickFields(body, allowed) {
@@ -353,14 +398,69 @@ function convertChatToResponses(body) {
   const { messages, ...rest } = body
   const result = pickFields(rest, TARGET_FIELDS.responses)
   result.input = messages
+  // Convert tools from Chat Completions format to Responses format
+  // Chat: { type: "function", function: { name, parameters, ... } }
+  // Responses: { type: "function", name, parameters, ... }
+  if (Array.isArray(rest.tools)) {
+    result.tools = rest.tools.map(t => {
+      if (t.type === 'function' && t.function) {
+        const func = t.function
+        const res = { type: 'function', name: func.name }
+        if (func.parameters) res.parameters = func.parameters
+        if (func.description) res.description = func.description
+        if (func.strict != null) res.strict = func.strict
+        return res
+      }
+      return t
+    })
+  }
   return result
 }
 
 function convertResponsesToChat(body) {
-  const { input, ...rest } = body
+  const { input, instructions, ...rest } = body
   const result = pickFields(rest, TARGET_FIELDS.chat_completions)
   if (rest.max_output_tokens != null) result.max_tokens = rest.max_output_tokens
-  result.messages = input || []
+  // Convert input: can be a string or an array
+  let messages = []
+  if (typeof input === 'string') {
+    messages = [{ role: 'user', content: input }]
+  } else if (Array.isArray(input)) {
+    messages = input.map(m => {
+      // Map roles: developer → system for Chat Completions compatibility
+      const role = m.role === 'developer' ? 'system' : m.role
+      // Convert content arrays: input_text → text, keep string content as-is
+      if (m.content && Array.isArray(m.content)) {
+        const text = m.content
+          .filter(c => c.type === 'input_text' || c.type === 'text')
+          .map(c => c.text || '')
+          .join('')
+        return { role, content: text }
+      }
+      return { role, content: m.content }
+    })
+  }
+  // Prepend instructions as system message
+  if (instructions) {
+    messages.unshift({ role: 'system', content: instructions })
+  }
+  result.messages = messages
+  // Convert tools from Responses format to Chat Completions format
+  // Responses: { type: "function", name, parameters, ... }
+  // Chat: { type: "function", function: { name, parameters, ... } }
+  // Skip tools with unsupported types (e.g. "custom")
+  if (Array.isArray(rest.tools)) {
+    result.tools = rest.tools
+      .filter(t => t.type === 'function')
+      .map(t => {
+        const { name, parameters, strict, description, ...extra } = t
+        const func = { name, parameters }
+        if (strict != null) func.strict = strict
+        if (description) func.description = description
+        return { type: 'function', function: func }
+      })
+    if (result.tools.length === 0) delete result.tools
+  }
   return result
 }
 
@@ -376,14 +476,21 @@ function convertMessagesToResponses(body) {
 }
 
 function convertResponsesToMessages(body) {
-  const { input, ...rest } = body
-  const msgs = input || []
-  const systemMsg = msgs.find(m => m.role === 'system')
-  const nonSystem = msgs.filter(m => m.role !== 'system')
+  const { input, instructions, ...rest } = body
+  // Convert input: can be a string or an array
+  let msgs = []
+  if (typeof input === 'string') {
+    msgs = [{ role: 'user', content: input }]
+  } else if (Array.isArray(input)) {
+    msgs = input
+  }
+  const systemMsg = msgs.find(m => m.role === 'system' || m.role === 'developer')
+  const nonSystem = msgs.filter(m => m.role !== 'system' && m.role !== 'developer')
   const result = pickFields(rest, TARGET_FIELDS.messages)
   if (rest.max_output_tokens != null) result.max_tokens = rest.max_output_tokens
   result.messages = nonSystem
   if (systemMsg) result.system = extractSystemContent(systemMsg)
+  else if (instructions) result.system = instructions
   return result
 }
 
@@ -410,6 +517,10 @@ function fmtAnthropicSSE(event, data) {
 
 function fmtOpenAISSE(data) {
   return `data: ${JSON.stringify(data)}\n\n`
+}
+
+function fmtResponsesSSE(event, data) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
 function mapFinishReason(reason) {
@@ -509,7 +620,23 @@ function messagesToChatSSEFactory() {
 
 function chatToResponsesSSEFactory() {
   let responseId = 'resp_' + Date.now()
+  let itemId = 'msg_' + Date.now()
   let model = ''
+  let started = false
+  let fullText = ''
+  let inputTokens = 0
+
+  function makeResponse(overrides) {
+    return Object.assign({
+      id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
+      status: 'in_progress', error: null, incomplete_details: null,
+      instructions: null, max_output_tokens: null, model,
+      output: [], parallel_tool_calls: true, previous_response_id: null,
+      reasoning: { effort: null, summary: null }, store: true, temperature: 1.0,
+      text: { format: { type: 'text' } }, tool_choice: 'auto', tools: [],
+      top_p: 1.0, truncation: 'disabled', usage: null, user: null, metadata: {}
+    }, overrides)
+  }
 
   return (line) => {
     if (!line.startsWith('data: ')) return ''
@@ -519,23 +646,57 @@ function chatToResponsesSSEFactory() {
       const data = JSON.parse(line.slice(6))
       const choice = data.choices?.[0]
       if (!choice) return ''
-
       if (data.model) model = data.model
 
+      if (choice.usage) {
+        inputTokens = choice.usage.prompt_tokens || data.usage?.prompt_tokens || 0
+      }
+      if (data.usage) {
+        inputTokens = data.usage.prompt_tokens || inputTokens
+      }
+
       const delta = choice.delta
-      if (delta?.role) {
-        return fmtOpenAISSE({ type: 'response.created', response: { id: responseId, model } })
+      let out = ''
+
+      if (!started) {
+        started = true
+        out += fmtResponsesSSE('response.created', { type: 'response.created', response: makeResponse({ status: 'in_progress' }) })
+        out += fmtResponsesSSE('response.in_progress', { type: 'response.in_progress', response: makeResponse({ status: 'in_progress' }) })
+        out += fmtResponsesSSE('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] } })
+        out += fmtResponsesSSE('response.content_part.added', { type: 'response.content_part.added', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } })
+        if (delta?.content) {
+          fullText += delta.content
+          out += fmtResponsesSSE('response.output_text.delta', { type: 'response.output_text.delta', item_id: itemId, output_index: 0, content_index: 0, delta: delta.content })
+        }
+        if (choice.finish_reason) {
+          out += finishResponses(inputTokens)
+        }
+        return out
       }
+
       if (delta?.content) {
-        return fmtOpenAISSE({ type: 'response.output_text.delta', item_id: responseId, output_index: 0, content_index: 0, delta: delta.content })
+        fullText += delta.content
+        return fmtResponsesSSE('response.output_text.delta', { type: 'response.output_text.delta', item_id: itemId, output_index: 0, content_index: 0, delta: delta.content })
       }
+
       if (choice.finish_reason) {
-        return fmtOpenAISSE({ type: 'response.completed', response: { id: responseId } }) + 'data: [DONE]\n\n'
+        return finishResponses(inputTokens)
       }
+
       return ''
     } catch {
       return ''
     }
+  }
+
+  function finishResponses(inputTokens) {
+    const outputTokens = 0
+    let out = ''
+    out += fmtResponsesSSE('response.output_text.done', { type: 'response.output_text.done', item_id: itemId, output_index: 0, content_index: 0, text: fullText })
+    out += fmtResponsesSSE('response.content_part.done', { type: 'response.content_part.done', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: fullText, annotations: [] } })
+    out += fmtResponsesSSE('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] } })
+    out += fmtResponsesSSE('response.completed', { type: 'response.completed', response: makeResponse({ status: 'completed', output: [{ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }], usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } }) })
+    return out
   }
 }
 
@@ -572,28 +733,68 @@ function responsesToChatSSEFactory() {
 
 function messagesToResponsesSSEFactory() {
   let responseId = 'resp_' + Date.now()
+  let itemId = 'msg_' + Date.now()
   let model = ''
+  let started = false
+  let fullText = ''
+  let inputTokens = 0
+
+  function makeResponse(overrides) {
+    return Object.assign({
+      id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
+      status: 'in_progress', error: null, incomplete_details: null,
+      instructions: null, max_output_tokens: null, model,
+      output: [], parallel_tool_calls: true, previous_response_id: null,
+      reasoning: { effort: null, summary: null }, store: true, temperature: 1.0,
+      text: { format: { type: 'text' } }, tool_choice: 'auto', tools: [],
+      top_p: 1.0, truncation: 'disabled', usage: null, user: null, metadata: {}
+    }, overrides)
+  }
+
+  function finishResponses() {
+    const outputTokens = 0
+    let out = ''
+    out += fmtResponsesSSE('response.output_text.done', { type: 'response.output_text.done', item_id: itemId, output_index: 0, content_index: 0, text: fullText })
+    out += fmtResponsesSSE('response.content_part.done', { type: 'response.content_part.done', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: fullText, annotations: [] } })
+    out += fmtResponsesSSE('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] } })
+    out += fmtResponsesSSE('response.completed', { type: 'response.completed', response: makeResponse({ status: 'completed', output: [{ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }], usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } }) })
+    return out
+  }
 
   return (line) => {
     if (!line.trim()) return ''
 
     try {
       if (line.startsWith('event: ')) return ''
-
       if (!line.startsWith('data: ')) return ''
       const data = JSON.parse(line.slice(6))
 
       if (data.type === 'message_start') {
         model = data.message?.model || model
-        return fmtOpenAISSE({ type: 'response.created', response: { id: responseId, model } })
+        inputTokens = data.message?.usage?.input_tokens || 0
+        let out = ''
+        out += fmtResponsesSSE('response.created', { type: 'response.created', response: makeResponse({ status: 'in_progress' }) })
+        out += fmtResponsesSSE('response.in_progress', { type: 'response.in_progress', response: makeResponse({ status: 'in_progress' }) })
+        out += fmtResponsesSSE('response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] } })
+        out += fmtResponsesSSE('response.content_part.added', { type: 'response.content_part.added', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } })
+        return out
       }
 
       if (data.type === 'content_block_delta') {
-        return fmtOpenAISSE({ type: 'response.output_text.delta', item_id: responseId, output_index: 0, content_index: 0, delta: data.delta?.text || '' })
+        const text = data.delta?.text || ''
+        if (text) fullText += text
+        return fmtResponsesSSE('response.output_text.delta', { type: 'response.output_text.delta', item_id: itemId, output_index: 0, content_index: 0, delta: text })
       }
 
-      if (data.type === 'message_stop') {
-        return fmtOpenAISSE({ type: 'response.completed', response: { id: responseId } }) + 'data: [DONE]\n\n'
+      if (data.type === 'message_delta') {
+        inputTokens = data.usage?.output_tokens ? inputTokens : inputTokens
+      }
+
+      if (data.type === 'content_block_stop' || data.type === 'message_stop') {
+        if (data.type === 'message_stop') {
+          return finishResponses()
+        }
+        return ''
       }
 
       return ''
@@ -801,44 +1002,86 @@ function convertMessagesResponseToResponses(data) {
     .filter(c => c.type === 'text')
     .map(c => c.text || '')
     .join('')
+  const msgId = 'msg_' + Date.now()
   return {
     id: data.id || ('msg_' + Date.now()),
     object: 'response',
     created_at: Math.floor(Date.now()),
     status: 'completed',
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
     model: data.model || '',
     output: [{
       type: 'message',
+      id: msgId,
+      status: 'completed',
       role: 'assistant',
-      content: [{ type: 'output_text', text: textContent }]
+      content: [{ type: 'output_text', text: textContent, annotations: [] }]
     }],
+    parallel_tool_calls: true,
+    previous_response_id: null,
+    reasoning: { effort: null, summary: null },
+    store: true,
+    temperature: 1.0,
+    text: { format: { type: 'text' } },
+    tool_choice: 'auto',
+    tools: [],
+    top_p: 1.0,
+    truncation: 'disabled',
     usage: {
       input_tokens: data.usage?.input_tokens || 0,
+      input_tokens_details: { cached_tokens: 0 },
       output_tokens: data.usage?.output_tokens || 0,
+      output_tokens_details: { reasoning_tokens: 0 },
       total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
-    }
+    },
+    user: null,
+    metadata: {}
   }
 }
 
 function convertChatResponseToResponses(data) {
   const choice = data.choices?.[0]
   const message = choice?.message || {}
+  const msgId = 'msg_' + Date.now()
   return {
     id: data.id || ('chatcmpl-' + Date.now()),
     object: 'response',
     created_at: Math.floor(Date.now()),
     status: 'completed',
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
     model: data.model || '',
     output: [{
       type: 'message',
+      id: msgId,
+      status: 'completed',
       role: 'assistant',
-      content: [{ type: 'output_text', text: message.content || '' }]
+      content: [{ type: 'output_text', text: message.content || '', annotations: [] }]
     }],
+    parallel_tool_calls: true,
+    previous_response_id: null,
+    reasoning: { effort: null, summary: null },
+    store: true,
+    temperature: 1.0,
+    text: { format: { type: 'text' } },
+    tool_choice: 'auto',
+    tools: [],
+    top_p: 1.0,
+    truncation: 'disabled',
     usage: {
       input_tokens: data.usage?.prompt_tokens || 0,
+      input_tokens_details: { cached_tokens: 0 },
       output_tokens: data.usage?.completion_tokens || 0,
+      output_tokens_details: { reasoning_tokens: 0 },
       total_tokens: data.usage?.total_tokens || 0
-    }
+    },
+    user: null,
+    metadata: {}
   }
 }
 
@@ -930,8 +1173,9 @@ async function handleApiRequest(req, res) {
   // Apply model mapping if enabled
   if (currentConfig.modelMappings && currentConfig.modelMappings.enabled && body.model) {
     for (const rule of currentConfig.modelMappings.rules) {
-      if (body.model === rule.from) {
+      if (body.model.toLowerCase() === rule.from.toLowerCase()) {
         body.model = rule.to
+        console.log(`[Model Mapping] ${rule.from} → ${rule.to} (matched: ${body.model})`)
         break
       }
     }
@@ -1003,7 +1247,8 @@ async function handleApiRequest(req, res) {
 
   forwardRequest(req, res, upstreamUrl, profile.apiKey, body, sseConverter,
     req._onResponseBody || null,
-    responseBodyConverter
+    responseBodyConverter,
+    source
   )
 }
 
@@ -1121,3 +1366,11 @@ server.on('error', (err) => {
     process.send({ type: 'error', error: 'EADDRINUSE', message: err.message })
   }
 })
+
+// 父进程断连后自动关闭 HTTP server 并退出，防止孤儿进程占用端口
+setInterval(() => {
+  if (!process.connected) {
+    server.close()
+    process.exit(0)
+  }
+}, 30000)

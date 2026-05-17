@@ -225,6 +225,10 @@ window.services = {
     proxyManager.clearLogs()
   },
 
+  clearAllData() {
+    proxyManager.clearAllData()
+  },
+
   clearLogsBodies() {
     proxyManager.clearLogsBodies()
   },

@@ -32,9 +32,13 @@ function saveSettings() {
 }
 function toggleLogging() { window.services.setLogEnabled(logEnabled.value) }
 function loadStats() { stats.value = window.services.getStats(); logs.value = window.services.getLogs(1000) }
-function clearStats() {
-  if (!window.confirm('确定要清除所有统计数据吗？')) return
+function clearLogs() {
+  if (!window.confirm('确定要清除所有请求日志吗？\n统计计数将保留。')) return
   window.services.clearLogs(); loadStats()
+}
+function clearAllData() {
+  if (!window.confirm('确定要清除所有数据和统计吗？此操作不可恢复。')) return
+  window.services.clearAllData(); loadStats()
 }
 function clearLogsBodyData() {
   if (!window.confirm('确定要清空所有请求参数和返回参数吗？统计计数将保留。')) return
@@ -264,7 +268,7 @@ onMounted(()=>{loadSettings();loadStats()})
           <h3>请求统计</h3>
           <div class="header-actions">
             <button class="refresh-btn" @click="loadStats">刷新</button>
-            <button class="clear-btn" @click="clearStats">清除数据</button>
+            <button class="clear-btn danger" @click="clearAllData">清除全部</button>
           </div>
         </div>
         <div class="card-body overview-body">
@@ -487,7 +491,10 @@ onMounted(()=>{loadSettings();loadStats()})
             </div>
             <div class="log-toolbar-actions">
               <span class="log-count">共 {{ filteredLogs.length }} 条</span>
-              <button class="clear-body-btn" @click="clearLogsBodyData">清空参数</button>
+              <div class="log-clear-btns">
+                <button class="clear-body-btn" @click="clearLogs">清除日志</button>
+                <button class="clear-body-btn" @click="clearLogsBodyData">清空参数</button>
+              </div>
             </div>
           </div>
           <div class="log-list" v-if="pagedLogs.length">
@@ -621,6 +628,8 @@ onMounted(()=>{loadSettings();loadStats()})
 .refresh-btn:hover { background: #f1f5f9; }
 .clear-btn { padding: 3px 8px; border: 1px solid #fecaca; border-radius: 6px; background: #fff; font-size: 12px; color: #ef4444; cursor: pointer; transition: all .15s; }
 .clear-btn:hover { background: #fef2f2; }
+.clear-btn.danger { border-color: #fca5a5; color: #b91c1c; }
+.clear-btn.danger:hover { background: #fef2f2; }
 .heatmap-wrap { width: 100%; }
 .heatmap-months { display: grid; gap: 1px; margin-bottom: 4px; padding-left: 21px; font-size: 10px; color: #94a3b8; width: calc(100% - 21px); }
 .heatmap-months span { grid-row: 1; }
@@ -638,6 +647,7 @@ onMounted(()=>{loadSettings();loadStats()})
 .log-filter { padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #334155; background: #f8fafc; outline: none; min-width: 0; flex: 1; }
 .log-filter:focus { border-color: #a5b4fc; background: #fff; }
 .log-toolbar-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.log-clear-btns { display: flex; gap: 6px; }
 .log-count { font-size: 12px; color: #94a3b8; }
 .clear-body-btn { padding: 3px 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; font-size: 12px; color: #64748b; cursor: pointer; transition: all .15s; }
 .clear-body-btn:hover { background: #f1f5f9; }

@@ -18,13 +18,14 @@ function getProxySettings() {
 }
 
 function setProxySettings(settings) {
+  const plain = JSON.parse(JSON.stringify(settings))
   const existing = window.utools.db.get(DB_KEYS.PROXY_SETTINGS)
   if (existing) {
-    window.utools.db.put({ _id: DB_KEYS.PROXY_SETTINGS, _rev: existing._rev, data: settings })
+    window.utools.db.put({ _id: DB_KEYS.PROXY_SETTINGS, _rev: existing._rev, data: plain })
   } else {
-    window.utools.db.put({ _id: DB_KEYS.PROXY_SETTINGS, data: settings })
+    window.utools.db.put({ _id: DB_KEYS.PROXY_SETTINGS, data: plain })
   }
-  return settings
+  return plain
 }
 
 // --- Profiles ---
@@ -143,14 +144,15 @@ function getModels() {
 }
 
 function setModels(models) {
+  const plain = JSON.parse(JSON.stringify(models))
   const existing = window.utools.db.get(DB_KEYS.MODELS)
-  const data = { models }
+  const data = { models: plain }
   if (existing) {
     window.utools.db.put({ _id: DB_KEYS.MODELS, _rev: existing._rev, data })
   } else {
     window.utools.db.put({ _id: DB_KEYS.MODELS, data })
   }
-  return models
+  return plain
 }
 
 // --- Model Mappings ---
@@ -161,13 +163,15 @@ function getModelMappings() {
 }
 
 function setModelMappings(mappings) {
+  // JSON round-trip to strip Vue reactive Proxy — uTools DB may not serialize Proxy objects correctly
+  const plain = JSON.parse(JSON.stringify(mappings))
   const existing = window.utools.db.get(DB_KEYS.MODEL_MAPPINGS)
   if (existing) {
-    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, _rev: existing._rev, data: mappings })
+    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, _rev: existing._rev, data: plain })
   } else {
-    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, data: mappings })
+    window.utools.db.put({ _id: DB_KEYS.MODEL_MAPPINGS, data: plain })
   }
-  return mappings
+  return plain
 }
 
 // --- Helpers ---
