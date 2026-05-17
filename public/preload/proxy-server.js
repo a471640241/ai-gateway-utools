@@ -623,6 +623,7 @@ function chatToResponsesSSEFactory() {
   let itemId = 'msg_' + Date.now()
   let model = ''
   let started = false
+  let completed = false
   let fullText = ''
   let inputTokens = 0
 
@@ -640,7 +641,13 @@ function chatToResponsesSSEFactory() {
 
   return (line) => {
     if (!line.startsWith('data: ')) return ''
-    if (line.startsWith('data: [DONE]')) return ''
+    if (line.startsWith('data: [DONE]')) {
+      if (started && !completed) {
+        completed = true
+        return finishResponses(inputTokens)
+      }
+      return ''
+    }
 
     try {
       const data = JSON.parse(line.slice(6))
@@ -669,6 +676,7 @@ function chatToResponsesSSEFactory() {
           out += fmtResponsesSSE('response.output_text.delta', { type: 'response.output_text.delta', item_id: itemId, output_index: 0, content_index: 0, delta: delta.content })
         }
         if (choice.finish_reason) {
+          completed = true
           out += finishResponses(inputTokens)
         }
         return out
@@ -680,6 +688,7 @@ function chatToResponsesSSEFactory() {
       }
 
       if (choice.finish_reason) {
+        completed = true
         return finishResponses(inputTokens)
       }
 
@@ -736,6 +745,7 @@ function messagesToResponsesSSEFactory() {
   let itemId = 'msg_' + Date.now()
   let model = ''
   let started = false
+  let completed = false
   let fullText = ''
   let inputTokens = 0
 
@@ -764,6 +774,14 @@ function messagesToResponsesSSEFactory() {
   return (line) => {
     if (!line.trim()) return ''
 
+    if (line.startsWith('data: [DONE]')) {
+      if (started && !completed) {
+        completed = true
+        return finishResponses()
+      }
+      return ''
+    }
+
     try {
       if (line.startsWith('event: ')) return ''
       if (!line.startsWith('data: ')) return ''
@@ -772,6 +790,7 @@ function messagesToResponsesSSEFactory() {
       if (data.type === 'message_start') {
         model = data.message?.model || model
         inputTokens = data.message?.usage?.input_tokens || 0
+        started = true
         let out = ''
         out += fmtResponsesSSE('response.created', { type: 'response.created', response: makeResponse({ status: 'in_progress' }) })
         out += fmtResponsesSSE('response.in_progress', { type: 'response.in_progress', response: makeResponse({ status: 'in_progress' }) })
@@ -792,6 +811,7 @@ function messagesToResponsesSSEFactory() {
 
       if (data.type === 'content_block_stop' || data.type === 'message_stop') {
         if (data.type === 'message_stop') {
+          completed = true
           return finishResponses()
         }
         return ''
