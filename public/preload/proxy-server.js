@@ -165,6 +165,11 @@ function forwardRequest(clientReq, clientRes, upstreamUrl, apiKey, body, sseConv
           const result = sseConverter(buffer)
           if (result) clientRes.write(result)
         }
+        // 上游连接断开但未发送 [DONE] 时，补发 response.completed 等收尾事件
+        if (sseConverter.flush) {
+          const flushed = sseConverter.flush()
+          if (flushed) clientRes.write(flushed)
+        }
         clientRes.end()
         if (onResponseBody) onResponseBody(rawBuffer || null)
       })
@@ -639,7 +644,17 @@ function chatToResponsesSSEFactory() {
     }, overrides)
   }
 
-  return (line) => {
+  function finishResponses(inputTokens) {
+    const outputTokens = 0
+    let out = ''
+    out += fmtResponsesSSE('response.output_text.done', { type: 'response.output_text.done', item_id: itemId, output_index: 0, content_index: 0, text: fullText })
+    out += fmtResponsesSSE('response.content_part.done', { type: 'response.content_part.done', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: fullText, annotations: [] } })
+    out += fmtResponsesSSE('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] } })
+    out += fmtResponsesSSE('response.completed', { type: 'response.completed', response: makeResponse({ status: 'completed', output: [{ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }], usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } }) })
+    return out
+  }
+
+  const convert = (line) => {
     if (!line.startsWith('data: ')) return ''
     if (line.startsWith('data: [DONE]')) {
       if (started && !completed) {
@@ -698,15 +713,15 @@ function chatToResponsesSSEFactory() {
     }
   }
 
-  function finishResponses(inputTokens) {
-    const outputTokens = 0
-    let out = ''
-    out += fmtResponsesSSE('response.output_text.done', { type: 'response.output_text.done', item_id: itemId, output_index: 0, content_index: 0, text: fullText })
-    out += fmtResponsesSSE('response.content_part.done', { type: 'response.content_part.done', item_id: itemId, output_index: 0, content_index: 0, part: { type: 'output_text', text: fullText, annotations: [] } })
-    out += fmtResponsesSSE('response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] } })
-    out += fmtResponsesSSE('response.completed', { type: 'response.completed', response: makeResponse({ status: 'completed', output: [{ id: itemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] }], usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } }) })
-    return out
+  convert.flush = () => {
+    if (started && !completed) {
+      completed = true
+      return finishResponses(inputTokens)
+    }
+    return ''
   }
+
+  return convert
 }
 
 function responsesToChatSSEFactory() {
@@ -771,7 +786,7 @@ function messagesToResponsesSSEFactory() {
     return out
   }
 
-  return (line) => {
+  const convert = (line) => {
     if (!line.trim()) return ''
 
     if (line.startsWith('data: [DONE]')) {
@@ -822,6 +837,16 @@ function messagesToResponsesSSEFactory() {
       return ''
     }
   }
+
+  convert.flush = () => {
+    if (started && !completed) {
+      completed = true
+      return finishResponses()
+    }
+    return ''
+  }
+
+  return convert
 }
 
 function responsesToMessagesSSEFactory() {
